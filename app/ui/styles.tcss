@@ -1,0 +1,50 @@
+Screen {
+    background: #0f0f23;
+    color: #cccccc;
+}
+
+/* ── Sport tabs ── */
+#sport-tabs-content {
+    text-align: center;
+    padding: 1 0;
+    background: #16213e;
+    color: #e0e0e0;
+}
+
+/* ── Games ticker ── */
+GamesTicker {
+    background: #0f0f23;
+}
+
+#games-content {
+    padding: 0;
+}
+
+/* ── EV panel ── */
+EVPanel {
+    background: #0a0a18;
+}
+
+#ev-header {
+    height: 1;
+    padding: 0 1;
+    background: #0d2818;
+}
+
+#ev-content {
+    padding: 0;
+}
+
+/* ── Settings panel ── */
+#settings-panel {
+    width: 50;
+    dock: right;
+    border-left: solid #444444;
+    padding: 1 2;
+    display: none;
+    background: #111128;
+}
+
+#settings-panel.visible {
+    display: block;
+}

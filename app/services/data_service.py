@@ -1,0 +1,196 @@
+"""Orchestrator: merge scores+odds, run EV detection, respect budget."""
+
+from __future__ import annotations
+
+import logging
+
+from app.api.client import OddsAPIClient
+from app.api.endpoints import get_events, get_odds, get_scores, get_sports
+from app.api.models import Event, GameRow, Score, Sport
+from app.config import Settings
+from app.services.budget import BudgetTracker
+from app.services.cache import TTLCache
+from app.services.ev import EVBet, find_ev_bets
+from app.services.ev_store import EVStore
+
+log = logging.getLogger(__name__)
+
+
+class DataService:
+    """Orchestrates API fetches, caching, merging, and EV detection."""
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.client = OddsAPIClient(settings.api_key)
+        self.cache = TTLCache()
+        self.budget = BudgetTracker(
+            low_warning=settings.low_credit_warning,
+            critical_stop=settings.critical_credit_stop,
+        )
+        self.ev_store = EVStore()
+        self._sports_cache: list[Sport] = []
+
+    async def close(self) -> None:
+        await self.client.close()
+        self.ev_store.close()
+
+    def _sync_budget(self) -> None:
+        info = self.client.last_credit_info
+        self.budget.update(info.remaining, info.used)
+
+    async def fetch_sports(self) -> list[Sport]:
+        """Fetch available sports (free endpoint)."""
+        cached = self.cache.get("sports")
+        if cached is not None:
+            return cached
+        try:
+            sports = await get_sports(self.client)
+            self._sports_cache = sports
+            self.cache.set("sports", sports, ttl=3600)
+            return sports
+        except Exception:
+            log.exception("Failed to fetch sports")
+            return self._sports_cache
+
+    async def has_events(self, sport: str) -> bool:
+        """Check if a sport has any events (free endpoint)."""
+        cache_key = f"{sport}:events_check"
+        cached = self.cache.get(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            events = await get_events(self.client, sport)
+            has = len(events) > 0
+            self.cache.set(cache_key, has, ttl=600)
+            return has
+        except Exception:
+            return True
+
+    async def fetch_scores(self, sport: str) -> list[Score]:
+        """Fetch live scores (costs 1 credit)."""
+        if not self.budget.can_fetch_scores:
+            log.warning("Budget critical, skipping scores fetch")
+            return self.cache.get(f"{sport}:scores") or []
+
+        cache_key = f"{sport}:scores"
+        cached = self.cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        try:
+            scores = await get_scores(self.client, sport)
+            self._sync_budget()
+            self.cache.set(cache_key, scores, ttl=self.settings.scores_refresh_interval)
+            return scores
+        except Exception:
+            log.exception("Failed to fetch scores for %s", sport)
+            return []
+
+    async def fetch_odds(self, sport: str) -> list[Event]:
+        """Fetch odds (costs credits based on markets x regions)."""
+        if not self.budget.can_fetch_odds:
+            log.warning("Budget low, skipping odds fetch")
+            return self.cache.get(f"{sport}:odds") or []
+
+        cache_key = f"{sport}:odds"
+        cached = self.cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        try:
+            events = await get_odds(
+                self.client,
+                sport,
+                regions=self.settings.regions_str,
+                markets="h2h,spreads,totals",
+                odds_format=self.settings.odds_format,
+                bookmakers=self.settings.bookmakers,
+            )
+            self._sync_budget()
+            self.cache.set(cache_key, events, ttl=self.settings.odds_refresh_interval)
+            return events
+        except Exception:
+            log.exception("Failed to fetch odds for %s", sport)
+            return []
+
+    async def get_game_rows(self, sport: str) -> list[GameRow]:
+        """Merge scores + odds into unified game rows."""
+        scores = await self.fetch_scores(sport)
+        events = await self.fetch_odds(sport)
+
+        score_map: dict[str, Score] = {s.id: s for s in scores}
+        rows: list[GameRow] = []
+
+        seen_ids: set[str] = set()
+        for event in events:
+            score = score_map.get(event.id)
+            rows.append(
+                GameRow(
+                    event_id=event.id,
+                    sport_key=event.sport_key,
+                    home_team=event.home_team,
+                    away_team=event.away_team,
+                    commence_time=event.commence_time,
+                    home_score=score.home_score() if score else "-",
+                    away_score=score.away_score() if score else "-",
+                    completed=score.completed if score else False,
+                    bookmakers=event.bookmakers,
+                )
+            )
+            seen_ids.add(event.id)
+
+        for score in scores:
+            if score.id not in seen_ids:
+                rows.append(
+                    GameRow(
+                        event_id=score.id,
+                        sport_key=score.sport_key,
+                        home_team=score.home_team,
+                        away_team=score.away_team,
+                        commence_time=score.commence_time,
+                        home_score=score.home_score(),
+                        away_score=score.away_score(),
+                        completed=score.completed,
+                    )
+                )
+
+        rows.sort(key=lambda r: (r.completed, r.commence_time))
+        return rows
+
+    async def get_ev_bets(self, sport: str) -> list[EVBet]:
+        """Find +EV bets for pre-game events only and persist to store."""
+        events = await self.fetch_odds(sport)
+        scores = await self.fetch_scores(sport)  # hits cache
+
+        # Only use pre-game events for EV — skip live and completed games
+        score_map = {s.id: s for s in scores}
+        pre_game = []
+        for e in events:
+            sc = score_map.get(e.id)
+            if sc is None:
+                pre_game.append(e)  # No score data = pre-game
+            elif sc.home_score() == "-" and not sc.completed:
+                pre_game.append(e)  # Has score entry but no actual scores
+            # else: live or completed — skip
+
+        bets = find_ev_bets(
+            pre_game,
+            selected_books=self.settings.bookmakers,
+            ev_threshold=self.settings.ev_threshold,
+        )
+
+        # Persist to SQLite and deactivate bets that disappeared
+        if bets:
+            self.ev_store.upsert_bets(bets)
+        self.ev_store.deactivate_missing(sport, bets)
+
+        return bets
+
+    def get_ev_for_sport(self, sport: str) -> list[dict]:
+        """Get active EV bets for a specific sport from the store."""
+        return self.ev_store.get_active_for_sport(sport, limit=40)
+
+    def force_refresh(self, sport: str) -> None:
+        """Invalidate cache for a sport to force a fresh fetch."""
+        self.cache.invalidate(f"{sport}:scores")
+        self.cache.invalidate(f"{sport}:odds")
