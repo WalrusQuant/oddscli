@@ -10,8 +10,12 @@ Built with Python, [Textual](https://textual.textualize.io/), and [The Odds API]
 
 - **Live odds from 20+ US bookmakers** — FanDuel, DraftKings, BetMGM, ESPN Bet, and more
 - **Three markets** — Toggle between moneyline, spreads, and totals
+- **Player props** — Browse player prop lines across books with sport-specific markets (PTS, REB, AST, Pass Yds, HR, etc.)
+- **DFS book support** — PrizePicks, Underdog, Pick6, and Betr with configurable effective odds for multi-leg pricing
+- **Inline no-vig & EV%** — Fair odds and expected value shown directly in both game and prop tables
 - **Best price highlighting** — Instantly see the best available odds across all books
-- **+EV detection** — Finds bets where a book's odds exceed fair market value using no-vig consensus pricing
+- **+EV detection** — Finds +EV game bets and player props using no-vig consensus pricing
+- **Sticky headers** — Column headers stay visible while scrolling through large tables
 - **Live scores** — Game status, scores, and start times
 - **API credit management** — Tracks usage and gracefully degrades when credits run low
 - **Configurable** — Choose your sports, bookmakers, refresh intervals, and EV threshold
@@ -57,13 +61,44 @@ python -m app.main
 | `q` | Quit |
 | `Left` / `Right` | Switch sport |
 | `r` | Force refresh |
-| `m` | Toggle market (moneyline / spread / total) |
+| `m` | Cycle market (moneyline / spread / total in games; filter props by market in props view) |
+| `p` | Toggle between games and player props views |
 | `e` | Toggle EV panel |
 | `s` | Toggle settings panel |
 
+## Player Props
+
+Press `p` to switch to the player props view. Props are fetched concurrently across all events for the selected sport and displayed with:
+
+- **Player name**, prop type, and Over/Under lines from each book
+- **NOVIG** column — fair no-vig odds derived from the market consensus
+- **EV%** column — inline expected value of the best available price
+- **Best price** highlighted across all books
+
+Use `m` to filter by specific prop markets. Available markets vary by sport:
+
+| Sport | Markets |
+|-------|---------|
+| NBA | PTS, REB, AST, 3PT, PRA |
+| NFL | PaYd, PaTD, RuYd, ReYd, Rec, ATD |
+| MLB | HR, Hits, TB, K |
+| NHL | Goal, SOG, Asst |
+
+### DFS Books
+
+DFS platforms (PrizePicks, Underdog, Pick6, Betr) are supported with configurable effective odds to account for multi-leg pricing differences. Set overrides in `settings.yaml`:
+
+```yaml
+dfs_books:
+  prizepicks: -137
+  underdog: -137
+  pick6: -137
+  betr_us_dfs: -137
+```
+
 ## +EV Detection
 
-Toggle the EV panel with `e` to see bets where a bookmaker's odds exceed the fair market price.
+Toggle the EV panel with `e` to see bets where a bookmaker's odds exceed the fair market price. The panel shows +EV opportunities for both game lines and player props.
 
 ![EV Panel](assets/ev-panel.png)
 
@@ -74,6 +109,8 @@ The engine uses **market-average no-vig consensus pricing** to estimate fair odd
 3. Removes the vig (normalizes probabilities to sum to 1.0)
 4. Compares each book's actual odds against the derived fair odds
 5. Flags bets where EV% exceeds the configured threshold (default 2%)
+
+For player props, Over/Under pairs are normalized independently per (player, market, line) to prevent inflated EV calculations.
 
 Requires at least 3 books contributing to the market average for reliability. Only pre-game lines are evaluated.
 
@@ -92,6 +129,10 @@ Press `s` to view your current settings, or edit `settings.yaml` directly:
 | `scores_refresh_interval` | 60 | Seconds between score refreshes |
 | `ev_threshold` | 2.0 | Minimum EV% to flag a bet |
 | `odds_format` | american | `american` or `decimal` |
+| `props_refresh_interval` | 300 | Seconds between props refreshes |
+| `props_max_concurrent` | 5 | Max concurrent event fetches for props |
+| `dfs_books` | {} | DFS book effective odds overrides |
+| `props_markets` | per-sport | Player prop markets to fetch per sport |
 | `low_credit_warning` | 50 | Show warning at this credit level |
 | `critical_credit_stop` | 10 | Pause API calls at this credit level |
 
@@ -99,9 +140,10 @@ Press `s` to view your current settings, or edit `settings.yaml` directly:
 
 The Odds API uses a credit system. The app tracks your remaining credits via response headers and adjusts behavior:
 
-- **Normal** — Fetches odds and scores on the configured intervals
+- **Normal** — Fetches odds, scores, and props on configured intervals
 - **Low credits** (< 50 remaining) — Yellow warning in status bar
 - **Critical** (< 10 remaining) — All API calls pause; cached data continues to display
+- **Props guard** — Props fetching pauses at 3x the critical threshold since each sport requires multiple per-event API calls
 
 ## License
 
