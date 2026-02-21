@@ -25,7 +25,7 @@ Built with Python, [Textual](https://textual.textualize.io/), and [The Odds API]
 
 ## Installation
 
-**Prerequisites:** Python 3.11+ and an API key from [The Odds API](https://the-odds-api.com/) (free tier available)
+**Prerequisites:** Python 3.11+ and an API key from [The Odds API](https://the-odds-api.com/) (free tier available, paid plan recommended — see [API Plans](#the-odds-api) below)
 
 ```bash
 git clone https://github.com/WalrusQuant/oddsapi.git
@@ -44,6 +44,25 @@ cp .env.example .env
 ```
 ODDS_API_KEY=your_api_key_here
 ```
+
+## The Odds API
+
+This app requires an API key from [The Odds API](https://the-odds-api.com/). The free tier includes 500 credits per month, but these get used up quickly — the **$30/month plan (20,000 credits)** is recommended.
+
+### Data Refresh Intervals
+
+| Market Type | Pre-Match Update | In-Play Update |
+|-------------|------------------|----------------|
+| Featured    |    60 seconds    |    40 seconds  | (moneyline, spreads, totals)
+| Additional  |    60 seconds    |    60 seconds  | (player props, alternates, period markets)
+| Futures     |    5 minutes     |    60 seconds  |
+| Betting EX  |    30 seconds    |    20 seconds  | (all markets)
+
+### Links
+
+- [The Odds API](https://the-odds-api.com/) — sign up and manage your API key
+- [API Documentation](https://the-odds-api.com/liveapi/guides/v4/) — endpoints, parameters, and credit usage
+- [Update Intervals](https://the-odds-api.com/sports-odds-data/update-intervals.html) — how often odds data refreshes
 
 ## Usage
 
