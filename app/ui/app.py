@@ -13,6 +13,7 @@ from app.config import Settings, load_settings
 from app.services.data_service import DataService
 from app.ui.widgets.ev_panel import EVPanel
 from app.ui.widgets.games_table import GamesTicker
+from app.ui.widgets.props_table import PropsTable
 from app.ui.widgets.sport_tabs import SportTabs
 from app.ui.widgets.status_bar import StatusBar
 
@@ -34,6 +35,7 @@ class OddsTickerApp(App):
         Binding("r", "refresh", "Refresh", show=False),
         Binding("m", "toggle_market", "Market", show=False),
         Binding("e", "toggle_ev", "Toggle EV", show=False),
+        Binding("p", "toggle_props", "Props", show=False),
         Binding("s", "toggle_settings", "Settings", show=False),
     ]
 
@@ -44,11 +46,14 @@ class OddsTickerApp(App):
         self._current_sport: str = ""
         self._scores_timer = None
         self._odds_timer = None
+        self._props_timer = None
         self._init_done = False  # True after initial setup completes
+        self._view_mode: str = "games"  # "games" or "props"
 
     def compose(self) -> ComposeResult:
         yield SportTabs(self.settings.sports, id="sport-tabs")
         yield GamesTicker(id="games-ticker")
+        yield PropsTable(id="props-table")
         yield EVPanel(id="ev-panel")
         yield Static(" ", id="settings-panel")
         yield StatusBar(id="status-bar")
@@ -69,9 +74,13 @@ class OddsTickerApp(App):
                 pass
             return
 
-        # Configure display books for the ticker
+        # Configure display books and DFS overrides for both tickers
         ticker = self.query_one("#games-ticker", GamesTicker)
         ticker.set_display_books(self.settings.bookmakers)
+        ticker.set_dfs_books(self.settings.dfs_books)
+
+        props_table = self.query_one("#props-table", PropsTable)
+        props_table.set_display_books(self.settings.bookmakers)
 
         # Run full initialization as a worker so it doesn't block
         # the message loop (which would prevent widgets from composing)
@@ -101,6 +110,9 @@ class OddsTickerApp(App):
         self._odds_timer = self.set_interval(
             self.settings.odds_refresh_interval, self._auto_refresh_odds
         )
+        self._props_timer = self.set_interval(
+            self.settings.props_refresh_interval, self._auto_refresh_props
+        )
 
     async def _filter_active_sports(self, wanted: list[str]) -> list[str]:
         try:
@@ -120,7 +132,10 @@ class OddsTickerApp(App):
         if event.sport_key == self._current_sport:
             return  # Already on this sport
         self._current_sport = event.sport_key
-        self.run_worker(self._load_data(), exclusive=True, group="load")
+        if self._view_mode == "props":
+            self.run_worker(self._load_props(), exclusive=True, group="load")
+        else:
+            self.run_worker(self._load_data(), exclusive=True, group="load")
 
     def action_next_sport(self) -> None:
         self.query_one("#sport-tabs", SportTabs).next_sport()
@@ -131,13 +146,39 @@ class OddsTickerApp(App):
     def action_refresh(self) -> None:
         if self._current_sport:
             self.data_service.force_refresh(self._current_sport)
-            self.run_worker(self._load_data(), exclusive=True, group="load")
+            if self._view_mode == "props":
+                self.run_worker(self._load_props(), exclusive=True, group="load")
+            else:
+                self.run_worker(self._load_data(), exclusive=True, group="load")
 
     def action_toggle_market(self) -> None:
-        self.query_one("#games-ticker", GamesTicker).toggle_market()
+        if self._view_mode == "props":
+            self.query_one("#props-table", PropsTable).cycle_filter()
+        else:
+            self.query_one("#games-ticker", GamesTicker).toggle_market()
 
     def action_toggle_ev(self) -> None:
         self.query_one("#ev-panel", EVPanel).toggle()
+
+    def action_toggle_props(self) -> None:
+        """Switch between games view and props view."""
+        ticker = self.query_one("#games-ticker", GamesTicker)
+        props = self.query_one("#props-table", PropsTable)
+
+        if self._view_mode == "games":
+            self._view_mode = "props"
+            ticker.display = False
+            props.add_class("visible")
+            # Load props data
+            if self._current_sport:
+                self.run_worker(self._load_props(), exclusive=True, group="load")
+        else:
+            self._view_mode = "games"
+            ticker.display = True
+            props.remove_class("visible")
+            # Reload game data + game EV
+            if self._current_sport:
+                self.run_worker(self._load_data(), exclusive=True, group="load")
 
     def action_toggle_settings(self) -> None:
         panel = self.query_one("#settings-panel", Static)
@@ -160,6 +201,7 @@ class OddsTickerApp(App):
             f"\n\n[bold]Refresh:[/bold]"
             f"\n  Scores: {s.scores_refresh_interval}s"
             f"\n  Odds: {s.odds_refresh_interval}s"
+            f"\n  Props: {s.props_refresh_interval}s"
         )
         self.query_one("#settings-panel", Static).update(text)
 
@@ -196,12 +238,56 @@ class OddsTickerApp(App):
             except Exception:
                 pass
 
+    async def _load_props(self) -> None:
+        """Fetch prop rows, run prop EV, and update widgets."""
+        if not self._current_sport:
+            return
+
+        sport = self._current_sport
+        log.info("Loading props for %s", sport)
+
+        props_table = self.query_one("#props-table", PropsTable)
+        status = self.query_one("#status-bar", StatusBar)
+        ev_panel = self.query_one("#ev-panel", EVPanel)
+
+        try:
+            # Set sport-specific filter keys before loading data
+            sport_markets = self.settings.props_markets.get(sport, [])
+            props_table.set_sport(sport, sport_markets)
+
+            events = await self.data_service.fetch_props(sport)
+            prop_rows = self.data_service.get_prop_rows(events)
+            log.info("Got %d prop rows for %s", len(prop_rows), sport)
+
+            await self.data_service.get_prop_ev_bets(sport)
+
+            props_table.update_props(prop_rows)
+
+            store_rows = self.data_service.get_prop_ev_for_sport(sport)
+            ev_panel.update_from_store(store_rows)
+
+            status.update_credits(self.data_service.budget)
+            status.update_refresh_time()
+
+        except Exception as e:
+            log.exception("Error loading props for %s", sport)
+            try:
+                content = props_table.query_one("#props-content", Static)
+                content.update(f"[bold red]Error: {e}[/bold red]")
+            except Exception:
+                pass
+
     async def _auto_refresh_scores(self) -> None:
-        if self._current_sport:
+        if self._current_sport and self._view_mode == "games":
             self.data_service.cache.invalidate(f"{self._current_sport}:scores")
             self.run_worker(self._load_data(), exclusive=True, group="load")
 
     async def _auto_refresh_odds(self) -> None:
-        if self._current_sport:
+        if self._current_sport and self._view_mode == "games":
             self.data_service.cache.invalidate(f"{self._current_sport}:odds")
             self.run_worker(self._load_data(), exclusive=True, group="load")
+
+    async def _auto_refresh_props(self) -> None:
+        if self._current_sport and self._view_mode == "props":
+            self.data_service.cache.invalidate(f"{self._current_sport}:props")
+            self.run_worker(self._load_props(), exclusive=True, group="load")

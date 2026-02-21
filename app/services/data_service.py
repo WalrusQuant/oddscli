@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import logging
 
+
 from app.api.client import OddsAPIClient
-from app.api.endpoints import get_events, get_odds, get_scores, get_sports
-from app.api.models import Event, GameRow, Score, Sport
+from app.api.endpoints import (
+    get_events,
+    get_odds,
+    get_props_for_events,
+    get_scores,
+    get_sports,
+)
+from app.api.models import Event, GameRow, PropRow, Score, Sport
 from app.config import Settings
 from app.services.budget import BudgetTracker
 from app.services.cache import TTLCache
@@ -177,12 +184,13 @@ class DataService:
             pre_game,
             selected_books=self.settings.bookmakers,
             ev_threshold=self.settings.ev_threshold,
+            dfs_books=self.settings.dfs_books,
         )
 
         # Persist to SQLite and deactivate bets that disappeared
         if bets:
             self.ev_store.upsert_bets(bets)
-        self.ev_store.deactivate_missing(sport, bets)
+        self.ev_store.deactivate_missing(sport, bets, is_props=False)
 
         return bets
 
@@ -190,7 +198,115 @@ class DataService:
         """Get active EV bets for a specific sport from the store."""
         return self.ev_store.get_active_for_sport(sport, limit=40)
 
+    # ── Props ──
+
+    async def fetch_props(self, sport: str) -> list[Event]:
+        """Fetch player-prop odds for all events in a sport."""
+        if not self.budget.can_fetch_props:
+            log.warning("Budget too low for props fetch")
+            return self.cache.get(f"{sport}:props") or []
+
+        cache_key = f"{sport}:props"
+        cached = self.cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # Get the prop market keys for this sport
+        markets = self.settings.props_markets.get(sport, [])
+        if not markets:
+            return []
+
+        try:
+            # Get event IDs (free endpoint)
+            raw_events = await get_events(self.client, sport)
+            event_ids = [e["id"] for e in raw_events]
+            if not event_ids:
+                return []
+
+            events = await get_props_for_events(
+                self.client,
+                sport,
+                event_ids,
+                regions=self.settings.regions_str,
+                markets=",".join(markets),
+                odds_format=self.settings.odds_format,
+                bookmakers=self.settings.bookmakers,
+                max_concurrent=self.settings.props_max_concurrent,
+            )
+            self._sync_budget()
+            self.cache.set(
+                cache_key, events, ttl=self.settings.props_refresh_interval
+            )
+            return events
+        except Exception:
+            log.exception("Failed to fetch props for %s", sport)
+            return []
+
+    def get_prop_rows(self, events: list[Event]) -> list[PropRow]:
+        """Flatten prop events into paired Over/Under PropRow list.
+
+        Groups by (event, player, market, point) so books at different lines
+        become separate rows.  DFS book odds are overridden from settings.
+        """
+        dfs = self.settings.dfs_books
+        merged: dict[str, PropRow] = {}
+
+        for event in events:
+            for bm in event.bookmakers:
+                for mkt in bm.markets:
+                    for outcome in mkt.outcomes:
+                        if not outcome.description:
+                            continue
+                        pt = outcome.point
+                        pt_key = str(pt) if pt is not None else "_"
+                        key = f"{event.id}|{outcome.description}|{mkt.key}|{pt_key}"
+                        if key not in merged:
+                            merged[key] = PropRow(
+                                event_id=event.id,
+                                sport_key=event.sport_key,
+                                home_team=event.home_team,
+                                away_team=event.away_team,
+                                commence_time=event.commence_time,
+                                player_name=outcome.description,
+                                market_key=mkt.key,
+                                consensus_point=pt,
+                            )
+
+                        row = merged[key]
+                        price = dfs.get(bm.key, outcome.price)
+                        if outcome.name == "Over":
+                            row.over_odds[bm.key] = price
+                        elif outcome.name == "Under":
+                            row.under_odds[bm.key] = price
+
+        result = list(merged.values())
+        result.sort(key=lambda r: (
+            r.commence_time, r.home_team, r.player_name,
+            r.market_key, r.consensus_point or 0,
+        ))
+        return result
+
+    async def get_prop_ev_bets(self, sport: str) -> list[EVBet]:
+        """Find +EV prop bets and persist to store."""
+        events = await self.fetch_props(sport)
+        bets = find_ev_bets(
+            events,
+            selected_books=self.settings.bookmakers,
+            ev_threshold=self.settings.ev_threshold,
+            is_props=True,
+            dfs_books=self.settings.dfs_books,
+        )
+        if bets:
+            self.ev_store.upsert_bets(bets)
+        self.ev_store.deactivate_missing(sport, bets, is_props=True)
+        return bets
+
+    def get_prop_ev_for_sport(self, sport: str) -> list[dict]:
+        """Get active prop EV bets from the store."""
+        return self.ev_store.get_active_for_sport(sport, limit=40, is_props=True)
+
     def force_refresh(self, sport: str) -> None:
         """Invalidate cache for a sport to force a fresh fetch."""
         self.cache.invalidate(f"{sport}:scores")
         self.cache.invalidate(f"{sport}:odds")
+        self.cache.invalidate(f"{sport}:props")

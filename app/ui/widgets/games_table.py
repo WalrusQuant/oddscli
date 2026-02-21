@@ -10,24 +10,14 @@ from rich.rule import Rule
 from rich.text import Text
 
 from textual.app import ComposeResult
-from textual.containers import VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Static
 
 from app.api.models import Bookmaker, GameRow
-
-BOOK_SHORT: dict[str, str] = {
-    "fanduel": "FanDuel", "draftkings": "DraftK", "betmgm": "BetMGM",
-    "betrivers": "BetRiv", "betonlineag": "BetOnl", "betus": "BetUS",
-    "bovada": "Bovada", "williamhill_us": "Caesars", "fanatics": "Fanatic",
-    "lowvig": "LowVig", "mybookieag": "MyBook", "ballybet": "Bally",
-    "betanysports": "BetAny", "betparx": "BetPrx", "espnbet": "ESPN",
-    "fliff": "Fliff", "hardrockbet": "HrdRck", "rebet": "Rebet",
-    "betopenly": "BetOpn", "kalshi": "Kalshi", "novig": "Novig",
-    "polymarket": "PolyMk", "prophetx": "PrphX",
-}
+from app.services.ev import compute_inline_ev
+from app.ui.widgets.constants import BOOK_SHORT, MAX_DISPLAY_BOOKS
 
 MARKET_LABELS = {"h2h": "MONEYLINE", "spreads": "SPREAD", "totals": "TOTAL"}
-MAX_DISPLAY_BOOKS = 20
 
 
 def _bk(key: str) -> str:
@@ -38,12 +28,22 @@ def _odds(price: float) -> str:
     return f"+{int(price)}" if price >= 0 else str(int(price))
 
 
+def _resolve_price(
+    price: float, book_key: str, dfs_books: dict[str, float] | None,
+) -> float:
+    """Return configured DFS odds or actual book price."""
+    if dfs_books and book_key in dfs_books:
+        return dfs_books[book_key]
+    return price
+
+
 def _get_book_price(
     game: GameRow,
     outcome_name: str,
     market_key: str,
     book_key: str,
     point: float | None = None,
+    dfs_books: dict[str, float] | None = None,
 ) -> float | None:
     """Get a specific book's price for an outcome."""
     for bm in game.bookmakers:
@@ -57,9 +57,9 @@ def _get_book_price(
                     continue
                 if market_key in ("spreads", "totals"):
                     if point is not None and o.point == point:
-                        return o.price
+                        return _resolve_price(o.price, bm.key, dfs_books)
                 else:
-                    return o.price
+                    return _resolve_price(o.price, bm.key, dfs_books)
     return None
 
 
@@ -68,6 +68,7 @@ def _best_price(
     outcome_name: str,
     market_key: str,
     point: float | None = None,
+    dfs_books: dict[str, float] | None = None,
 ) -> float | None:
     """Get the best price across ALL books for an outcome."""
     best = None
@@ -78,14 +79,40 @@ def _best_price(
             for o in m.outcomes:
                 if o.name != outcome_name:
                     continue
+                p = _resolve_price(o.price, bm.key, dfs_books)
                 if market_key in ("spreads", "totals"):
                     if point is not None and o.point == point:
-                        if best is None or o.price > best:
-                            best = o.price
+                        if best is None or p > best:
+                            best = p
                 else:
-                    if best is None or o.price > best:
-                        best = o.price
+                    if best is None or p > best:
+                        best = p
     return best
+
+
+def _all_prices(
+    game: GameRow,
+    outcome_name: str,
+    market_key: str,
+    point: float | None = None,
+    dfs_books: dict[str, float] | None = None,
+) -> list[float]:
+    """Collect all book prices for an outcome (for no-vig calculation)."""
+    prices: list[float] = []
+    for bm in game.bookmakers:
+        for m in bm.markets:
+            if m.key != market_key:
+                continue
+            for o in m.outcomes:
+                if o.name != outcome_name:
+                    continue
+                p = _resolve_price(o.price, bm.key, dfs_books)
+                if market_key in ("spreads", "totals"):
+                    if point is not None and o.point == point:
+                        prices.append(p)
+                else:
+                    prices.append(p)
+    return prices
 
 
 def _consensus_spread(bookmakers: list[Bookmaker], team: str) -> float | None:
@@ -132,6 +159,8 @@ def _build_header(market: str, display_books: list[str]) -> Text:
     h.append(" ")
     if market in ("spreads", "totals"):
         h.append("LINE".center(7), style="bold #e94560")
+    h.append("NOVIG".center(7), style="bold #e94560")
+    h.append("EV%".center(6), style="bold #e94560")
     h.append("BEST".center(8), style="bold #00ff88")
     for bk in display_books:
         h.append(_bk(bk).center(8), style="bold #888888")
@@ -140,6 +169,7 @@ def _build_header(market: str, display_books: list[str]) -> Text:
 
 def _build_game_lines(
     game: GameRow, market: str, display_books: list[str],
+    dfs_books: dict[str, float] | None = None,
 ) -> tuple[Text, Text]:
     """Build away + home lines for one game."""
     away_line = Text()
@@ -225,9 +255,38 @@ def _build_game_lines(
             away_line.append("-".center(7), style="dim")
             home_line.append("-".center(7), style="dim")
 
+    # ── NOVIG + EV% columns ──
+    a_prices = _all_prices(game, a_outcome, market, a_point, dfs_books)
+    h_prices = _all_prices(game, h_outcome, market, h_point, dfs_books)
+
+    a_novig, a_ev = compute_inline_ev(a_prices, h_prices)
+    h_novig, h_ev = compute_inline_ev(h_prices, a_prices)
+
+    # NOVIG
+    if a_novig is not None:
+        away_line.append(_odds(a_novig).center(7), style="white")
+    else:
+        away_line.append("-".center(7), style="dim")
+    if h_novig is not None:
+        home_line.append(_odds(h_novig).center(7), style="white")
+    else:
+        home_line.append("-".center(7), style="dim")
+
+    # EV%
+    if a_ev is not None:
+        ev_style = "bold #00ff88" if a_ev > 0 else "dim"
+        away_line.append(f"{a_ev:+.1f}%".center(6), style=ev_style)
+    else:
+        away_line.append("-".center(6), style="dim")
+    if h_ev is not None:
+        ev_style = "bold #00ff88" if h_ev > 0 else "dim"
+        home_line.append(f"{h_ev:+.1f}%".center(6), style=ev_style)
+    else:
+        home_line.append("-".center(6), style="dim")
+
     # ── BEST column ──
-    a_best = _best_price(game, a_outcome, market, a_point)
-    h_best = _best_price(game, h_outcome, market, h_point)
+    a_best = _best_price(game, a_outcome, market, a_point, dfs_books)
+    h_best = _best_price(game, h_outcome, market, h_point, dfs_books)
 
     if a_best is not None:
         away_line.append(_odds(a_best).center(8), style="bold #00ff88")
@@ -241,8 +300,8 @@ def _build_game_lines(
 
     # ── Individual book columns ──
     for bk in display_books:
-        a_price = _get_book_price(game, a_outcome, market, bk, a_point)
-        h_price = _get_book_price(game, h_outcome, market, bk, h_point)
+        a_price = _get_book_price(game, a_outcome, market, bk, a_point, dfs_books)
+        h_price = _get_book_price(game, h_outcome, market, bk, h_point, dfs_books)
 
         if a_price is not None:
             is_best = a_best is not None and a_price >= a_best
@@ -265,11 +324,8 @@ def _build_game_lines(
     return away_line, home_line
 
 
-def _build_display(
-    games: list[GameRow], market: str, display_books: list[str],
-) -> Group:
-    """Build the full games display."""
-    # Market toggle bar
+def _build_sticky_header(market: str, display_books: list[str]) -> Group:
+    """Build the sticky portion: toggle bar + column headers."""
     toggle = Text()
     for mkt, label in MARKET_LABELS.items():
         if mkt == market:
@@ -279,15 +335,22 @@ def _build_display(
         toggle.append("  ")
     toggle.append("(m to toggle)", style="dim italic")
 
-    elements: list = [
-        toggle,
-        Text(""),
-        _build_header(market, display_books),
-        Rule(style="#444444"),
-    ]
+    return Group(toggle, Text(""), _build_header(market, display_books), Rule(style="#444444"))
 
+
+def _build_rows(
+    games: list[GameRow], market: str, display_books: list[str],
+    dfs_books: dict[str, float] | None = None,
+) -> Group:
+    """Build the scrollable game rows."""
+    if not games:
+        return Group(Text("  No games found for this sport", style="dim"))
+
+    elements: list = []
     for i, game in enumerate(games):
-        away_line, home_line = _build_game_lines(game, market, display_books)
+        away_line, home_line = _build_game_lines(
+            game, market, display_books, dfs_books,
+        )
         elements.extend([away_line, home_line])
         if i < len(games) - 1:
             elements.append(Rule(style="#222222"))
@@ -295,13 +358,19 @@ def _build_display(
     return Group(*elements)
 
 
-class GamesTicker(VerticalScroll):
-    """Scrollable multi-book odds display with market toggle."""
+class GamesTicker(Vertical):
+    """Multi-book odds display with sticky header and scrollable rows."""
 
     DEFAULT_CSS = """
     GamesTicker {
         height: 1fr;
         padding: 0 1;
+    }
+    GamesTicker #games-header {
+        height: auto;
+    }
+    GamesTicker #games-scroll {
+        height: 1fr;
     }
     """
 
@@ -310,10 +379,15 @@ class GamesTicker(VerticalScroll):
         self._market: str = "h2h"
         self._last_games: list[GameRow] | None = None
         self._display_books: list[str] = []
+        self._dfs_books: dict[str, float] | None = None
 
     def set_display_books(self, books: list[str]) -> None:
         """Set which bookmakers to display as columns."""
         self._display_books = books[:MAX_DISPLAY_BOOKS]
+
+    def set_dfs_books(self, dfs_books: dict[str, float]) -> None:
+        """Set DFS book odds overrides."""
+        self._dfs_books = dfs_books or None
 
     def toggle_market(self) -> None:
         """Cycle through h2h → spreads → totals."""
@@ -324,17 +398,24 @@ class GamesTicker(VerticalScroll):
             self.update_games(self._last_games)
 
     def compose(self) -> ComposeResult:
-        yield Static("[dim]Waiting for data...[/dim]", id="games-content")
+        yield Static(" ", id="games-header")
+        with VerticalScroll(id="games-scroll"):
+            yield Static("[dim]Waiting for data...[/dim]", id="games-content")
 
     def update_games(self, games: list[GameRow]) -> None:
         self._last_games = games
         try:
+            header = self.query_one("#games-header", Static)
             content = self.query_one("#games-content", Static)
         except Exception:
             return
+
+        header.update(_build_sticky_header(self._market, self._display_books))
 
         if not games:
             content.update("[dim]No games found for this sport[/dim]")
             return
 
-        content.update(_build_display(games, self._market, self._display_books))
+        content.update(_build_rows(
+            games, self._market, self._display_books, self._dfs_books,
+        ))

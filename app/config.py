@@ -44,6 +44,30 @@ class Settings(BaseModel):
     regions: list[str] = Field(default_factory=lambda: ["us", "us2", "us_ex"])
     low_credit_warning: int = 50
     critical_credit_stop: int = 10
+    props_enabled: bool = True
+    props_refresh_interval: int = 300
+    props_max_concurrent: int = 5
+    # DFS books: book_key → effective odds for your lineup type.
+    # API always returns a fixed juice (e.g. -137) but actual odds depend on legs.
+    dfs_books: dict[str, float] = Field(default_factory=dict)
+    props_markets: dict[str, list[str]] = Field(default_factory=lambda: {
+        "americanfootball_nfl": [
+            "player_pass_yds", "player_pass_tds", "player_rush_yds",
+            "player_reception_yds", "player_receptions", "player_anytime_td",
+        ],
+        "basketball_nba": [
+            "player_points", "player_rebounds", "player_assists",
+            "player_threes", "player_points_rebounds_assists",
+        ],
+        "baseball_mlb": [
+            "batter_home_runs", "batter_hits", "batter_total_bases",
+            "pitcher_strikeouts",
+        ],
+        "icehockey_nhl": [
+            "player_points", "player_goals", "player_assists",
+            "player_shots_on_goal",
+        ],
+    })
 
     @property
     def regions_str(self) -> str:
