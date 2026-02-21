@@ -19,7 +19,20 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-No test suite or linter is currently configured.
+### Tests & Linting
+
+Dev tools are configured in `pyproject.toml` under `[project.optional-dependencies] dev`:
+
+```bash
+pip install -e ".[dev]"
+pytest tests/                        # run all tests
+pytest tests/test_ev.py              # single test file
+pytest tests/test_ev.py -k "test_name"  # single test
+ruff check app/                      # lint
+mypy app/                            # type check
+```
+
+pytest uses `asyncio_mode = "auto"`. Ruff targets py312, line-length 100, ignores E501.
 
 ## Architecture
 
@@ -32,7 +45,7 @@ Three-layer async app: **API → Services → UI** (Textual 8.0 TUI).
 
 ### Services Layer (`app/services/`)
 - `data_service.py` — Central orchestrator; coordinates API calls, caching, budget, and EV detection. Merges scores + odds into `GameRow` objects. Fetches props per-event with semaphore-limited concurrency.
-- `ev.py` — EV engine + `EVBet` model. Computes no-vig consensus odds from 3+ books, compares each book's odds to fair price, filters by `ev_threshold`. Props EV normalizes Over/Under pairs independently per (player, market, line).
+- `ev.py` — EV/arb/middles engine. Models: `EVBet`, `ArbBet`, `MiddleBet`. Key functions: `find_ev_bets()`, `find_arb_bets()`, `find_middle_bets()`, and their prop variants (`find_prop_arb_bets()`, `find_prop_middle_bets()`). Computes no-vig consensus odds from 3+ books, compares each book's odds to fair price, filters by `ev_threshold`. Props EV normalizes Over/Under pairs independently per (player, market, line). Arb detection finds two-leg guaranteed-profit opportunities. Middles detection finds cross-line windows with sport-specific hit probability estimation.
 - `ev_store.py` — SQLite persistence for EV bets (`ev_history.db`); drops/recreates table on init. Tracks both game and prop EV via `is_prop` flag.
 - `cache.py` — In-memory TTL cache keyed by `"{sport}:{data_type}"`
 - `budget.py` — Tracks API credits from response headers; blocks fetches when critical
@@ -42,6 +55,8 @@ Three-layer async app: **API → Services → UI** (Textual 8.0 TUI).
 - `widgets/games_table.py` — Multi-book odds grid; toggles between h2h/spreads/totals markets with inline no-vig & EV%
 - `widgets/props_table.py` — Player props paired Over/Under display with inline EV, sticky header, sport-aware market filtering
 - `widgets/ev_panel.py` — +EV opportunities panel (toggle with `e` key); shows both game and prop EV bets
+- `widgets/arb_panel.py` — Arbitrage opportunities panel (toggle with `a` key); shows guaranteed-profit two-leg arbs with bet sizing
+- `widgets/middles_panel.py` — Middles (cross-line) opportunities panel (toggle with `m` key); shows EV%, hit probability, and window size
 - `widgets/sport_tabs.py` — Sport navigation tabs with reactive `active_index`; posts `SportTabs.Changed` messages
 - `widgets/status_bar.py` — Credits, refresh time, warnings, keybinding hints
 - `widgets/constants.py` — Shared constants: `BOOK_SHORT` (display abbreviations), `PROP_LABELS` (market key → short label), `MAX_DISPLAY_BOOKS`
@@ -49,11 +64,14 @@ Three-layer async app: **API → Services → UI** (Textual 8.0 TUI).
 
 ### Data Flow
 
-**Games view:** User action → `_load_data()` → `get_game_rows()` (merge scores + odds) → `get_ev_bets()` → `ticker.update_games()` + `ev_panel.update_from_store()`
+**Games view:** User action → `_load_data()` → `get_game_rows()` (merge scores + odds) → `get_ev_bets()` / `find_arb_bets()` / `find_middle_bets()` → `ticker.update_games()` + panels update
 
-**Props view:** User action → `_load_props()` → `fetch_props()` (per-event API calls) → `get_prop_rows()` → `get_prop_ev_bets()` → `props_table.update_props()` + `ev_panel.update_from_store()`
+**Props view:** User action → `_load_props()` → `fetch_props()` (per-event API calls) → `get_prop_rows()` → `get_prop_ev_bets()` / `find_prop_arb_bets()` / `find_prop_middle_bets()` → `props_table.update_props()` + panels update
 
 Workers use `run_worker(exclusive=True, group="load")` to prevent concurrent fetches.
+
+### Keybindings (app.py BINDINGS)
+`q` quit, `left/right` switch sport, `1/2/3` moneyline/spread/total, `r` refresh, `p` toggle games/props view, `e` EV panel, `a` arb panel, `m` middles panel, `f` book filter, `t` cycle prop market filter, `/` search props, `l` toggle alt lines, `s` settings panel.
 
 ### View Mode Switching
 App maintains `_view_mode` ("games" or "props"), toggled with `p`. Switches visibility via CSS `display` + class toggling. Games and props have independent auto-refresh timers (`_odds_timer`, `_scores_timer`, `_props_timer`).

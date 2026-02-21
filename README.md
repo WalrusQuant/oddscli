@@ -64,14 +64,14 @@ python -m app.main
 | `q` | Quit |
 | `Left` / `Right` | Switch sport |
 | `1` / `2` / `3` | Jump to moneyline / spread / total |
-| `m` | Cycle market (games view) or filter by prop market (props view) |
 | `f` | Cycle book filter (games view) |
+| `t` | Cycle prop market filter (props view) |
 | `/` | Search player props (props view) |
 | `r` | Force refresh |
 | `p` | Toggle between games and player props views |
 | `e` | Toggle +EV panel |
 | `a` | Toggle arbitrage panel |
-| `b` | Toggle middles panel |
+| `m` | Toggle middles panel |
 | `l` | Toggle alternate lines (alt spreads & totals) |
 | `s` | Toggle settings panel |
 
@@ -84,14 +84,14 @@ Press `p` to switch to the player props view. Props are fetched concurrently acr
 - **EV%** column — inline expected value of the best available price
 - **Best price** highlighted across all books
 
-Use `m` to filter by specific prop markets. Available markets vary by sport:
+Use `t` to filter by specific prop markets. Available markets vary by sport:
 
 | Sport | Markets |
 |-------|---------|
 | NBA | PTS, REB, AST, 3PT, PRA |
 | NFL | PaYd, PaTD, RuYd, ReYd, Rec, ATD |
 | MLB | HR, Hits, TB, K |
-| NHL | Goal, SOG, Asst |
+| NHL | Goal, AST, SOG |
 
 ### DFS Books
 
@@ -140,7 +140,7 @@ Arbs are detected across all markets including alternate lines when enabled. Onl
 
 ## Middles Detection
 
-Toggle the middles panel with `b` to see cross-line opportunities where different books offer different lines, creating a window where both bets can win.
+Toggle the middles panel with `m` to see cross-line opportunities where different books offer different lines, creating a window where both bets can win.
 
 For example: Over 220.5 at Book A and Under 222.5 at Book B — if the total lands on 221 or 222, both legs win.
 
@@ -165,10 +165,12 @@ Press `s` to view your current settings, or edit `settings.yaml` directly:
 |---------|---------|-------------|
 | `sports` | NFL, NBA, MLB, NHL, NCAAB | Which sports to display |
 | `bookmakers` | 20+ US books | Books to compare odds across |
-| `regions` | us, us2, us_ex | API regions to pull from |
+| `regions` | us, us2, us_ex, us_dfs | API regions to pull from |
 | `odds_refresh_interval` | 60 | Seconds between odds refreshes |
 | `scores_refresh_interval` | 60 | Seconds between score refreshes |
 | `ev_threshold` | 2.0 | Minimum EV% to flag a bet |
+| `ev_odds_min` | -200 | Only show EV bets at or above this American odds |
+| `ev_odds_max` | 200 | Only show EV bets at or below this American odds |
 | `odds_format` | american | `american` or `decimal` |
 | `props_refresh_interval` | 300 | Seconds between props refreshes |
 | `props_max_concurrent` | 5 | Max concurrent event fetches for props |
