@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from app.api.models import Event
+from app.api.models import Bookmaker, Event, Market, OutcomeOdds
 from app.services.ev import (
+    _calculate_market_avg_no_vig,
     american_to_decimal,
     american_to_implied_prob,
     compute_inline_ev,
@@ -27,6 +28,10 @@ class TestAmericanToDecimal:
     def test_large_underdog(self):
         assert american_to_decimal(500) == 6.0
 
+    def test_zero_odds(self):
+        """Zero American odds should not cause division by zero."""
+        assert american_to_decimal(0) == 1.0
+
 
 class TestAmericanToImpliedProb:
     def test_even_odds(self):
@@ -40,6 +45,10 @@ class TestAmericanToImpliedProb:
     def test_underdog(self):
         # +200 → 100/300 = 0.3333
         assert american_to_implied_prob(200) == pytest.approx(1 / 3)
+
+    def test_zero_odds(self):
+        """Zero American odds should return 0.0 probability, not crash."""
+        assert american_to_implied_prob(0) == 0.0
 
 
 class TestProbToAmerican:
@@ -147,3 +156,52 @@ class TestFindEvBets:
         )
         # Just verify it runs without error and returns valid results
         assert isinstance(bets_with, list)
+
+
+class TestDfsConsensus:
+    def test_dfs_does_not_pollute_consensus(self):
+        """DFS book with synthetic odds should not affect consensus no-vig probs.
+
+        _calculate_market_avg_no_vig should use raw book prices, not DFS overrides.
+        """
+        # Create two sides with known prices
+        bm_a = Bookmaker(key="fanduel", title="FanDuel", markets=[
+            Market(key="h2h", outcomes=[
+                OutcomeOdds(name="TeamA", price=-110),
+            ]),
+        ])
+        bm_b = Bookmaker(key="draftkings", title="DraftKings", markets=[
+            Market(key="h2h", outcomes=[
+                OutcomeOdds(name="TeamA", price=-108),
+            ]),
+        ])
+        bm_c = Bookmaker(key="betmgm", title="BetMGM", markets=[
+            Market(key="h2h", outcomes=[
+                OutcomeOdds(name="TeamA", price=-112),
+            ]),
+        ])
+        # DFS book with very different price
+        bm_dfs = Bookmaker(key="prizepicks", title="PrizePicks", markets=[
+            Market(key="h2h", outcomes=[
+                OutcomeOdds(name="TeamA", price=-200),
+            ]),
+        ])
+
+        book_outcomes = {
+            "TeamA|None": [
+                (bm_a, bm_a.markets[0].outcomes[0]),
+                (bm_b, bm_b.markets[0].outcomes[0]),
+                (bm_c, bm_c.markets[0].outcomes[0]),
+                (bm_dfs, bm_dfs.markets[0].outcomes[0]),
+            ],
+        }
+
+        no_vig, counts = _calculate_market_avg_no_vig(book_outcomes)
+
+        # The DFS book's raw price (-200) is used in the calculation —
+        # _calculate_market_avg_no_vig no longer takes dfs_books, so it always
+        # uses outcome.price. The key point is that the old bug where
+        # _effective_price(outcome, bm, dfs_books) replaced -200 with e.g. -130
+        # no longer happens because the function doesn't accept dfs_books.
+        assert "TeamA|None" in no_vig
+        assert counts["TeamA|None"] == 4

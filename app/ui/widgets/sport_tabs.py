@@ -47,7 +47,7 @@ class SportTabs(Widget):
         return SPORT_LABELS.get(sport_key, sport_key.split("_")[-1].upper())
 
     def compose(self) -> ComposeResult:
-        yield Static(id="sport-tabs-content")
+        yield Static(" ", id="sport-tabs-content")
 
     def on_mount(self) -> None:
         self._render_tabs()

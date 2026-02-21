@@ -38,10 +38,15 @@ class OddsAPIClient:
     def _parse_credits(self, response: httpx.Response) -> CreditInfo:
         remaining = response.headers.get("x-requests-remaining")
         used = response.headers.get("x-requests-used")
-        info = CreditInfo(
-            remaining=int(remaining) if remaining else None,
-            used=int(used) if used else None,
-        )
+        try:
+            remaining_int = int(remaining) if remaining else None
+        except ValueError:
+            remaining_int = None
+        try:
+            used_int = int(used) if used else None
+        except ValueError:
+            used_int = None
+        info = CreditInfo(remaining=remaining_int, used=used_int)
         self.last_credit_info = info
         return info
 

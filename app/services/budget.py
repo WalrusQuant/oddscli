@@ -14,9 +14,11 @@ class BudgetTracker:
 
     def update(self, remaining: int | None, used: int | None) -> None:
         if remaining is not None:
-            self.remaining = remaining
+            if self.remaining is None or remaining <= self.remaining:
+                self.remaining = remaining
         if used is not None:
-            self.used = used
+            if self.used is None or used >= self.used:
+                self.used = used
 
     @property
     def is_low(self) -> bool:

@@ -16,7 +16,7 @@ BASE_STAKE = 100.0  # Leg A fixed wager
 
 
 def _odds(price: float) -> str:
-    return f"+{int(price)}" if price >= 0 else str(int(price))
+    return f"+{int(round(price))}" if price >= 0 else str(int(round(price)))
 
 
 def _build_arb_header() -> Text:

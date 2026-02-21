@@ -222,8 +222,9 @@ class DataService:
 
     async def get_game_rows(self, sport: str) -> list[GameRow]:
         """Merge scores + odds into unified game rows."""
-        scores = await self.fetch_scores(sport)
-        events = await self.fetch_odds(sport)
+        scores, events = await asyncio.gather(
+            self.fetch_scores(sport), self.fetch_odds(sport),
+        )
 
         # Enrich with alt lines before building rows
         if self.settings.alt_lines_enabled:
@@ -297,8 +298,8 @@ class DataService:
 
         # Persist to SQLite and deactivate bets that disappeared
         if bets:
-            self.ev_store.upsert_bets(bets)
-        self.ev_store.deactivate_missing(sport, bets, is_props=False)
+            await asyncio.to_thread(self.ev_store.upsert_bets, bets)
+        await asyncio.to_thread(self.ev_store.deactivate_missing, sport, bets, is_props=False)
 
         return bets
 
@@ -435,8 +436,8 @@ class DataService:
             odds_range=(self.settings.ev_odds_min, self.settings.ev_odds_max),
         )
         if bets:
-            self.ev_store.upsert_bets(bets)
-        self.ev_store.deactivate_missing(sport, bets, is_props=True)
+            await asyncio.to_thread(self.ev_store.upsert_bets, bets)
+        await asyncio.to_thread(self.ev_store.deactivate_missing, sport, bets, is_props=True)
         return bets
 
     def get_prop_ev_for_sport(self, sport: str) -> list[dict]:

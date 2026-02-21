@@ -100,3 +100,29 @@ def test_warning_text_normal():
     bt = BudgetTracker(low_warning=50, critical_stop=10)
     bt.update(remaining=100, used=None)
     assert bt.warning_text == ""
+
+
+def test_update_monotonic_remaining():
+    """Out-of-order responses should not increase remaining credits."""
+    bt = BudgetTracker()
+    bt.update(remaining=100, used=None)
+    assert bt.remaining == 100
+    # Stale response with higher remaining should be ignored
+    bt.update(remaining=150, used=None)
+    assert bt.remaining == 100
+    # Lower remaining should be accepted
+    bt.update(remaining=90, used=None)
+    assert bt.remaining == 90
+
+
+def test_update_monotonic_used():
+    """Out-of-order responses should not decrease used credits."""
+    bt = BudgetTracker()
+    bt.update(remaining=None, used=400)
+    assert bt.used == 400
+    # Stale response with lower used should be ignored
+    bt.update(remaining=None, used=350)
+    assert bt.used == 400
+    # Higher used should be accepted
+    bt.update(remaining=None, used=410)
+    assert bt.used == 410

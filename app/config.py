@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
 import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator
+
+log = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -20,8 +23,12 @@ def _load_env() -> None:
 def _load_yaml() -> dict:
     settings_path = PROJECT_ROOT / "settings.yaml"
     if settings_path.exists():
-        with open(settings_path) as f:
-            return yaml.safe_load(f) or {}
+        try:
+            with open(settings_path) as f:
+                return yaml.safe_load(f) or {}
+        except yaml.YAMLError:
+            log.warning("Failed to parse settings.yaml, using defaults")
+            return {}
     return {}
 
 

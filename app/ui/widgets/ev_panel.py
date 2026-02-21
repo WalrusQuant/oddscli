@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from rich.console import Group
 from rich.rule import Rule
@@ -15,7 +15,7 @@ from app.ui.widgets.constants import PROP_LABELS, trunc
 
 
 def _odds(price: float) -> str:
-    return f"+{int(price)}" if price >= 0 else str(int(price))
+    return f"+{int(round(price))}" if price >= 0 else str(int(round(price)))
 
 
 def _mkt(market: str) -> str:
@@ -31,7 +31,8 @@ def _ago(dt_str: str | None) -> str:
         return ""
     try:
         dt = datetime.fromisoformat(dt_str)
-        mins = int((datetime.now() - dt).total_seconds() / 60)
+        now = datetime.now(timezone.utc) if dt.tzinfo else datetime.now()
+        mins = int((now - dt).total_seconds() / 60)
         if mins < 1:
             return "now"
         if mins < 60:

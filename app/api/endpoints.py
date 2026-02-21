@@ -109,8 +109,8 @@ async def get_props_for_events(
                     odds_format=odds_format,
                     bookmakers=bookmakers,
                 )
-            except Exception:
-                log.warning("Failed to fetch props for event %s", eid)
+            except Exception as exc:
+                log.warning("Failed to fetch props for event %s: %s", eid, exc)
                 return None
 
     results = await asyncio.gather(*[_fetch_one(eid) for eid in event_ids])

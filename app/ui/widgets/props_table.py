@@ -21,7 +21,7 @@ def _bk(key: str) -> str:
 
 
 def _odds(price: float) -> str:
-    return f"+{int(price)}" if price >= 0 else str(int(price))
+    return f"+{int(round(price))}" if price >= 0 else str(int(round(price)))
 
 
 def _prop_label(market_key: str) -> str:
@@ -213,16 +213,16 @@ def _build_sticky_header(
     )
 
 
-def _sort_props_by_ev(rows: list[PropRow]) -> list[PropRow]:
-    """Sort props: grouped by game (commence_time, event), EV desc within each game."""
-    def _sort_key(r: PropRow) -> tuple:
-        over_prices = list(r.over_odds.values())
-        under_prices = list(r.under_odds.values())
+def _precompute_ev(rows: list[PropRow]) -> dict[int, float]:
+    """Pre-compute best EV for each row (by id) to avoid redundant calls."""
+    ev_cache: dict[int, float] = {}
+    for row in rows:
+        over_prices = list(row.over_odds.values())
+        under_prices = list(row.under_odds.values())
         _, ov_ev = compute_inline_ev(over_prices, under_prices)
         _, un_ev = compute_inline_ev(under_prices, over_prices)
-        best_ev = max(ov_ev or -999, un_ev or -999)
-        return (r.commence_time, r.event_id, -best_ev, r.player_name)
-    return sorted(rows, key=_sort_key)
+        ev_cache[id(row)] = max(ov_ev or -999, un_ev or -999)
+    return ev_cache
 
 
 def _build_rows(
@@ -238,8 +238,11 @@ def _build_rows(
     if not rows:
         return Group(Text("  No prop lines found", style="dim"))
 
-    # Sort by EV
-    rows = _sort_props_by_ev(rows)
+    # Pre-compute EV once, then sort using cached values
+    ev_cache = _precompute_ev(rows)
+    rows = sorted(rows, key=lambda r: (
+        r.commence_time, r.event_id, -ev_cache.get(id(r), -999), r.player_name,
+    ))
 
     elements: list = []
 

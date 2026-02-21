@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 
 from pydantic import BaseModel
@@ -88,6 +89,8 @@ class MiddleBet(BaseModel):
 
 def american_to_decimal(american: float) -> float:
     """Convert American odds to decimal odds."""
+    if american == 0:
+        return 1.0
     if american >= 100:
         return (american / 100) + 1
     else:
@@ -96,6 +99,8 @@ def american_to_decimal(american: float) -> float:
 
 def american_to_implied_prob(american: float) -> float:
     """Convert American odds to implied probability."""
+    if american == 0:
+        return 0.0
     if american < 0:
         return abs(american) / (abs(american) + 100)
     else:
@@ -241,7 +246,7 @@ def _find_game_ev(
             continue
 
         no_vig_probs, book_counts = _calculate_market_avg_no_vig(
-            book_outcomes, dfs_books,
+            book_outcomes,
         )
 
         min_books = min(book_counts.values()) if book_counts else 0
@@ -295,7 +300,7 @@ def _find_prop_ev(
                 continue  # Need both Over and Under
 
             no_vig_probs, book_counts = _calculate_market_avg_no_vig(
-                pair_outcomes, dfs_books,
+                pair_outcomes,
             )
 
             min_books = min(book_counts.values()) if book_counts else 0
@@ -376,12 +381,14 @@ def _emit_ev_bets(
 
 def _calculate_market_avg_no_vig(
     book_outcomes: dict[str, list[tuple[Bookmaker, OutcomeOdds]]],
-    dfs_books: dict[str, float] | None = None,
 ) -> tuple[dict[str, float], dict[str, int]]:
     """Calculate no-vig probabilities from market average across all books.
 
     Outcomes passed in should be a related group (e.g. Over + Under at the
     same line) so normalization produces correct probabilities.
+
+    Uses raw book prices (not DFS overrides) so consensus is not polluted
+    by synthetic DFS odds.
 
     Returns (no_vig_probs, book_counts).
     """
@@ -391,9 +398,8 @@ def _calculate_market_avg_no_vig(
     avg_probs: dict[str, list[float]] = {}
     for outcome_key, entries in book_outcomes.items():
         for bm, outcome in entries:
-            price = _effective_price(outcome, bm, dfs_books)
             avg_probs.setdefault(outcome_key, []).append(
-                american_to_implied_prob(price)
+                american_to_implied_prob(outcome.price)
             )
 
     raw_probs = {k: sum(v) / len(v) for k, v in avg_probs.items() if v}
@@ -557,7 +563,6 @@ def _estimate_middle_hit_prob(
     # For spreads: -3 / +4.5 → margin of victory 4 → 1 spot (exactly 4)
     # General: floor(window) spots if both endpoints are half-points,
     # otherwise floor(window) spots. This is approximate.
-    import math
     landing_spots = max(1, math.floor(window_size))
 
     # Cap at a reasonable probability (a 10-point window isn't 35%)
