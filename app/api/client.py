@@ -20,12 +20,16 @@ class CreditInfo:
 class OddsAPIClient:
     """Async HTTP client for the Odds API."""
 
-    def __init__(self, api_key: str) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self._api_key = api_key
-        self._client = httpx.AsyncClient(
-            base_url=BASE_URL,
-            timeout=15.0,
-        )
+        kwargs: dict[str, Any] = {"base_url": BASE_URL, "timeout": 15.0}
+        if transport is not None:
+            kwargs["transport"] = transport
+        self._client = httpx.AsyncClient(**kwargs)
         self.last_credit_info = CreditInfo()
 
     async def close(self) -> None:

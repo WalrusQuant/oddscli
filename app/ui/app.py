@@ -7,12 +7,15 @@ from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.containers import ScrollableContainer
 from textual.widgets import Static
 
 from app.config import Settings, load_settings
 from app.services.data_service import DataService
+from app.ui.widgets.arb_panel import ArbPanel
 from app.ui.widgets.ev_panel import EVPanel
 from app.ui.widgets.games_table import GamesTicker
+from app.ui.widgets.middles_panel import MiddlesPanel
 from app.ui.widgets.props_table import PropsTable
 from app.ui.widgets.sport_tabs import SportTabs
 from app.ui.widgets.status_bar import StatusBar
@@ -33,10 +36,18 @@ class OddsTickerApp(App):
         Binding("right", "next_sport", "Next Sport", show=False),
         Binding("left", "prev_sport", "Prev Sport", show=False),
         Binding("r", "refresh", "Refresh", show=False),
-        Binding("m", "toggle_market", "Market", show=False),
+        Binding("m", "toggle_middles", "Middles Panel", show=False),
         Binding("e", "toggle_ev", "Toggle EV", show=False),
         Binding("p", "toggle_props", "Props", show=False),
         Binding("s", "toggle_settings", "Settings", show=False),
+        Binding("1", "market_h2h", "Moneyline", show=False),
+        Binding("2", "market_spreads", "Spread", show=False),
+        Binding("3", "market_totals", "Total", show=False),
+        Binding("f", "toggle_filter", "Filter", show=False),
+        Binding("a", "toggle_arb", "Arb Panel", show=False),
+        Binding("t", "cycle_prop_market", "Prop Market", show=False),
+        Binding("slash", "toggle_search", "Search", show=False),
+        Binding("l", "toggle_alt_lines", "Alt Lines", show=False),
     ]
 
     def __init__(self) -> None:
@@ -55,7 +66,10 @@ class OddsTickerApp(App):
         yield GamesTicker(id="games-ticker")
         yield PropsTable(id="props-table")
         yield EVPanel(id="ev-panel")
-        yield Static(" ", id="settings-panel")
+        yield ArbPanel(id="arb-panel")
+        yield MiddlesPanel(id="mid-panel")
+        with ScrollableContainer(id="settings-scroll"):
+            yield Static(" ", id="settings-content")
         yield StatusBar(id="status-bar")
 
     async def on_mount(self) -> None:
@@ -78,9 +92,12 @@ class OddsTickerApp(App):
         ticker = self.query_one("#games-ticker", GamesTicker)
         ticker.set_display_books(self.settings.bookmakers)
         ticker.set_dfs_books(self.settings.dfs_books)
+        # Alt data is fetched when alt_lines_enabled=true, but display
+        # starts collapsed — press 'l' to expand alt rows
 
         props_table = self.query_one("#props-table", PropsTable)
         props_table.set_display_books(self.settings.bookmakers)
+        props_table.set_dfs_books(self.settings.dfs_books)
 
         # Run full initialization as a worker so it doesn't block
         # the message loop (which would prevent widgets from composing)
@@ -146,19 +163,78 @@ class OddsTickerApp(App):
     def action_refresh(self) -> None:
         if self._current_sport:
             self.data_service.force_refresh(self._current_sport)
+            status = self.query_one("#status-bar", StatusBar)
+            status.set_refreshing(True)
             if self._view_mode == "props":
                 self.run_worker(self._load_props(), exclusive=True, group="load")
             else:
                 self.run_worker(self._load_data(), exclusive=True, group="load")
 
-    def action_toggle_market(self) -> None:
+    def action_cycle_prop_market(self) -> None:
         if self._view_mode == "props":
             self.query_one("#props-table", PropsTable).cycle_filter()
-        else:
-            self.query_one("#games-ticker", GamesTicker).toggle_market()
+
+    def action_market_h2h(self) -> None:
+        if self._view_mode == "games":
+            self.query_one("#games-ticker", GamesTicker).set_market("h2h")
+
+    def action_market_spreads(self) -> None:
+        if self._view_mode == "games":
+            self.query_one("#games-ticker", GamesTicker).set_market("spreads")
+
+    def action_market_totals(self) -> None:
+        if self._view_mode == "games":
+            self.query_one("#games-ticker", GamesTicker).set_market("totals")
+
+    def action_toggle_filter(self) -> None:
+        if self._view_mode == "games":
+            self.query_one("#games-ticker", GamesTicker).cycle_filter()
 
     def action_toggle_ev(self) -> None:
         self.query_one("#ev-panel", EVPanel).toggle()
+
+    def action_toggle_arb(self) -> None:
+        self.query_one("#arb-panel", ArbPanel).toggle()
+
+    def action_toggle_middles(self) -> None:
+        self.query_one("#mid-panel", MiddlesPanel).toggle()
+
+    def action_toggle_search(self) -> None:
+        if self._view_mode == "props":
+            self.query_one("#props-table", PropsTable).toggle_search()
+
+    def action_toggle_alt_lines(self) -> None:
+        """Toggle alternate lines display on/off.
+
+        When alt_lines_enabled=true in settings, alt data is always fetched.
+        This toggle only controls whether alt rows are expanded in the display.
+        If alt data hasn't been fetched yet, triggers a refresh to get it.
+        """
+        ticker = self.query_one("#games-ticker", GamesTicker)
+        new_state = not ticker._alt_lines
+        ticker.set_alt_lines(new_state)
+        state = "ON" if new_state else "OFF"
+        status = self.query_one("#status-bar", StatusBar)
+        status.set_warning(f"Alt Lines: {state}")
+
+        if new_state and self._current_sport:
+            # Turning on — may need to fetch alt data if not cached
+            self.data_service.force_refresh(self._current_sport)
+            if self._view_mode == "props":
+                self.run_worker(self._load_props(), exclusive=True, group="load")
+            else:
+                self.run_worker(self._load_data(), exclusive=True, group="load")
+        elif self._last_games_for_redraw():
+            # Turning off — just re-render with existing data (no fetch needed)
+            ticker.update_games(ticker._last_games)
+
+    def _last_games_for_redraw(self) -> bool:
+        """Check if ticker has cached games for a display-only redraw."""
+        try:
+            ticker = self.query_one("#games-ticker", GamesTicker)
+            return ticker._last_games is not None
+        except Exception:
+            return False
 
     def action_toggle_props(self) -> None:
         """Switch between games view and props view."""
@@ -171,6 +247,7 @@ class OddsTickerApp(App):
             props.add_class("visible")
             # Load props data
             if self._current_sport:
+                props.set_loading(True)
                 self.run_worker(self._load_props(), exclusive=True, group="load")
         else:
             self._view_mode = "games"
@@ -181,11 +258,11 @@ class OddsTickerApp(App):
                 self.run_worker(self._load_data(), exclusive=True, group="load")
 
     def action_toggle_settings(self) -> None:
-        panel = self.query_one("#settings-panel", Static)
-        if panel.has_class("visible"):
-            panel.remove_class("visible")
+        scroll = self.query_one("#settings-scroll", ScrollableContainer)
+        if scroll.has_class("visible"):
+            scroll.remove_class("visible")
         else:
-            panel.add_class("visible")
+            scroll.add_class("visible")
             self._render_settings_panel()
 
     def _render_settings_panel(self) -> None:
@@ -197,13 +274,18 @@ class OddsTickerApp(App):
             + "\n".join(f"  - {b}" for b in s.bookmakers)
             + f"\n\n[bold]EV Reference:[/bold] {s.ev_reference}"
             f"\n[bold]EV Threshold:[/bold] {s.ev_threshold}%"
+            f"\n[bold]EV Odds Range:[/bold] {s.ev_odds_min:+.0f} to {s.ev_odds_max:+.0f}"
             f"\n[bold]Odds Format:[/bold] {s.odds_format}"
             f"\n\n[bold]Refresh:[/bold]"
             f"\n  Scores: {s.scores_refresh_interval}s"
             f"\n  Odds: {s.odds_refresh_interval}s"
             f"\n  Props: {s.props_refresh_interval}s"
+            f"\n\n[bold]Features:[/bold]"
+            f"\n  Alt Lines: {'ON' if s.alt_lines_enabled else 'OFF'}"
+            f"\n  Arb Detection: {'ON' if s.arb_enabled else 'OFF'}"
+            f"\n  Middle Detection: {'ON' if s.middle_enabled else 'OFF'}"
         )
-        self.query_one("#settings-panel", Static).update(text)
+        self.query_one("#settings-content", Static).update(text)
 
     async def _load_data(self) -> None:
         if not self._current_sport:
@@ -215,20 +297,31 @@ class OddsTickerApp(App):
         ticker = self.query_one("#games-ticker", GamesTicker)
         status = self.query_one("#status-bar", StatusBar)
         ev_panel = self.query_one("#ev-panel", EVPanel)
+        arb_panel = self.query_one("#arb-panel", ArbPanel)
+        mid_panel = self.query_one("#mid-panel", MiddlesPanel)
+
+        ticker.set_loading(True)
 
         try:
             games = await self.data_service.get_game_rows(sport)
             log.info("Got %d games for %s", len(games), sport)
 
-            await self.data_service.get_ev_bets(sport)
+            ev_bets = await self.data_service.get_ev_bets(sport)
 
             ticker.update_games(games)
 
-            store_rows = self.data_service.get_ev_for_sport(sport)
-            ev_panel.update_from_store(store_rows)
+            ev_panel.update_bets(ev_bets)
+
+            # Arb + middles detection
+            arbs = await self.data_service.get_arb_bets(sport)
+            arb_panel.update_arbs(arbs)
+
+            middles = await self.data_service.get_middle_bets(sport)
+            mid_panel.update_middles(middles)
 
             status.update_credits(self.data_service.budget)
             status.update_refresh_time()
+            status.set_refreshing(False)
 
         except Exception as e:
             log.exception("Error loading data for %s", sport)
@@ -250,6 +343,8 @@ class OddsTickerApp(App):
         status = self.query_one("#status-bar", StatusBar)
         ev_panel = self.query_one("#ev-panel", EVPanel)
 
+        props_table.set_loading(True)
+
         try:
             # Set sport-specific filter keys before loading data
             sport_markets = self.settings.props_markets.get(sport, [])
@@ -259,15 +354,15 @@ class OddsTickerApp(App):
             prop_rows = self.data_service.get_prop_rows(events)
             log.info("Got %d prop rows for %s", len(prop_rows), sport)
 
-            await self.data_service.get_prop_ev_bets(sport)
+            prop_ev_bets = await self.data_service.get_prop_ev_bets(sport)
 
             props_table.update_props(prop_rows)
 
-            store_rows = self.data_service.get_prop_ev_for_sport(sport)
-            ev_panel.update_from_store(store_rows)
+            ev_panel.update_bets(prop_ev_bets)
 
             status.update_credits(self.data_service.budget)
             status.update_refresh_time()
+            status.set_refreshing(False)
 
         except Exception as e:
             log.exception("Error loading props for %s", sport)

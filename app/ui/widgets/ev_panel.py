@@ -7,17 +7,15 @@ from datetime import datetime
 from rich.console import Group
 from rich.rule import Rule
 from rich.text import Text
-
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.widgets import Static
 
+from app.ui.widgets.constants import PROP_LABELS, trunc
+
 
 def _odds(price: float) -> str:
     return f"+{int(price)}" if price >= 0 else str(int(price))
-
-
-from app.ui.widgets.constants import PROP_LABELS
 
 
 def _mkt(market: str) -> str:
@@ -52,7 +50,7 @@ def _build_ev_header() -> Text:
     h.append("  ")
     h.append("GAME".ljust(28), style="bold #00ff88")
     h.append("  ")
-    h.append("PICK".ljust(20), style="bold #00ff88")
+    h.append("PICK".ljust(30), style="bold #00ff88")
     h.append("  ")
     h.append("ODDS".rjust(6), style="bold #00ff88")
     h.append("  ")
@@ -80,21 +78,21 @@ def _build_ev_row(r: dict) -> Text:
     line.append("  ")
 
     # Book
-    line.append(r["book_title"][:14].ljust(14), style="bold")
+    line.append(trunc(r["book_title"], 14), style="bold")
 
     line.append("  ")
 
     # Game
     away = r["away_team"][:12]
     home = r["home_team"][:12]
-    line.append(f"{away} @ {home}".ljust(28), style="dim")
+    line.append(trunc(f"{away} @ {home}", 28), style="dim")
 
     line.append("  ")
 
     # Pick — market + outcome + point (NO odds here)
     is_prop = bool(r.get("is_prop"))
     if is_prop:
-        player = (r.get("player_name") or "")[:10]
+        player = (r.get("player_name") or "")[:16]
         prop_lbl = _prop_mkt(r["market"])
         ou = r["outcome_name"][:1]  # O or U
         pt = r.get("outcome_point_str", "")
@@ -106,7 +104,7 @@ def _build_ev_row(r: dict) -> Text:
         pt = r.get("outcome_point_str", "")
         pt_str = f" {pt}" if pt else ""
         pick_str = f"{market} {outcome}{pt_str}"
-    line.append(pick_str[:20].ljust(20), style="white")
+    line.append(trunc(pick_str, 30), style="white")
 
     line.append("  ")
 
@@ -144,9 +142,12 @@ class EVPanel(VerticalScroll):
 
     DEFAULT_CSS = """
     EVPanel {
-        height: 40%;
+        height: auto;
+        max-height: 45%;
+        min-height: 6;
         border-top: thick #00ff88;
         padding: 0 1;
+        display: none;
     }
     """
 
@@ -196,6 +197,8 @@ class EVPanel(VerticalScroll):
                 "detected_at": (
                     bet.detected_at.isoformat() if bet.detected_at else None
                 ),
+                "is_prop": bet.is_prop,
+                "player_name": bet.player_name,
             })
         content.update(_build_ev_display(rows))
 

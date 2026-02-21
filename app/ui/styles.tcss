@@ -39,6 +39,11 @@ PropsTable {
     background: #0f0f23;
 }
 
+#props-search {
+    background: #1a1a2e;
+    border: tall #444444;
+}
+
 #props-scroll {
     background: #0f0f23;
 }
@@ -66,8 +71,38 @@ EVPanel {
     padding: 0;
 }
 
+/* ── Arb panel ── */
+ArbPanel {
+    background: #0a0a10;
+}
+
+#arb-header {
+    height: 1;
+    padding: 0 1;
+    background: #1a1800;
+}
+
+#arb-content {
+    padding: 0;
+}
+
+/* ── Middles panel ── */
+MiddlesPanel {
+    background: #0a0a10;
+}
+
+#mid-header {
+    height: 1;
+    padding: 0 1;
+    background: #140a1e;
+}
+
+#mid-content {
+    padding: 0;
+}
+
 /* ── Settings panel ── */
-#settings-panel {
+#settings-scroll {
     width: 50;
     dock: right;
     border-left: solid #444444;
@@ -76,6 +111,6 @@ EVPanel {
     background: #111128;
 }
 
-#settings-panel.visible {
+#settings-scroll.visible {
     display: block;
 }

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -27,6 +27,11 @@ def _load_yaml() -> dict:
 
 class Settings(BaseModel):
     api_key: str = ""
+
+    @field_validator("api_key")
+    @classmethod
+    def strip_api_key(cls, v: str) -> str:
+        return v.strip()
     bookmakers: list[str] = Field(default_factory=lambda: ["fanduel", "draftkings"])
     ev_reference: str = "market_average"
     sports: list[str] = Field(
@@ -40,6 +45,8 @@ class Settings(BaseModel):
     odds_refresh_interval: int = 300
     scores_refresh_interval: int = 120
     ev_threshold: float = 2.0
+    ev_odds_min: float = -200
+    ev_odds_max: float = 200
     odds_format: str = "american"
     regions: list[str] = Field(default_factory=lambda: ["us", "us2", "us_ex"])
     low_credit_warning: int = 50
@@ -49,6 +56,12 @@ class Settings(BaseModel):
     props_max_concurrent: int = 5
     # DFS books: book_key → effective odds for your lineup type.
     # API always returns a fixed juice (e.g. -137) but actual odds depend on legs.
+    alt_lines_enabled: bool = False
+    arb_enabled: bool = True
+    arb_min_profit_pct: float = 0.1
+    middle_enabled: bool = True
+    middle_min_window: float = 0.5
+    middle_max_combined_cost: float = 1.08
     dfs_books: dict[str, float] = Field(default_factory=dict)
     props_markets: dict[str, list[str]] = Field(default_factory=lambda: {
         "americanfootball_nfl": [

@@ -39,3 +39,10 @@ PROP_LABELS: dict[str, str] = {
 }
 
 MAX_DISPLAY_BOOKS = 20
+
+
+def trunc(s: str, n: int) -> str:
+    """Truncate string to n chars, adding ~ indicator when truncated."""
+    if len(s) <= n:
+        return s.ljust(n)
+    return s[: n - 1] + "~"

@@ -32,17 +32,17 @@ class BudgetTracker:
 
     @property
     def can_fetch_odds(self) -> bool:
-        """Whether we have enough credits for an odds fetch."""
+        """Whether we have enough credits for an odds fetch. Blocks when low."""
         if self.remaining is None:
             return True  # Unknown budget, allow
-        return self.remaining > self.critical_stop
+        return not self.is_low
 
     @property
     def can_fetch_scores(self) -> bool:
-        """Scores-only mode when low, full stop when critical."""
+        """Scores allowed when low, blocked only when critical."""
         if self.remaining is None:
             return True
-        return self.remaining > self.critical_stop
+        return not self.is_critical
 
     @property
     def can_fetch_props(self) -> bool:

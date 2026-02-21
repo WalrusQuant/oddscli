@@ -8,7 +8,6 @@ from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Static
 
-
 SPORT_LABELS: dict[str, str] = {
     "americanfootball_nfl": "NFL",
     "americanfootball_ncaaf": "NCAAF",

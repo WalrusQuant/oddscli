@@ -7,14 +7,13 @@ from itertools import groupby
 from rich.console import Group
 from rich.rule import Rule
 from rich.text import Text
-
 from textual.app import ComposeResult
-from textual.containers import Vertical, VerticalScroll
-from textual.widgets import Static
+from textual.containers import ScrollableContainer, Vertical
+from textual.widgets import Input, Static
 
 from app.api.models import PropRow
 from app.services.ev import compute_inline_ev
-from app.ui.widgets.constants import BOOK_SHORT, MAX_DISPLAY_BOOKS, PROP_LABELS
+from app.ui.widgets.constants import BOOK_SHORT, MAX_DISPLAY_BOOKS, PROP_LABELS, trunc
 
 
 def _bk(key: str) -> str:
@@ -29,10 +28,37 @@ def _prop_label(market_key: str) -> str:
     return PROP_LABELS.get(market_key, market_key[:6])
 
 
+def _short_book(book_key: str) -> str:
+    """Short 2-3 char abbreviation for best-book labels."""
+    short_map = {
+        "fanduel": "FD", "draftkings": "DK", "betmgm": "MGM",
+        "betrivers": "BR", "bovada": "BOV", "williamhill_us": "CZR",
+        "fanatics": "FAN", "espnbet": "ESPN", "hardrockbet": "HR",
+        "betonlineag": "BOL", "lowvig": "LV", "ballybet": "BAL",
+        "prizepicks": "PP", "underdog": "UD", "fliff": "FL",
+    }
+    return short_map.get(book_key, book_key[:2].upper())
+
+
+def _best_with_book(odds_dict: dict[str, float]) -> tuple[float | None, str | None]:
+    """Get best price and which book it's from."""
+    if not odds_dict:
+        return None, None
+    best_book = max(odds_dict, key=odds_dict.get)  # type: ignore[arg-type]
+    return odds_dict[best_book], best_book
+
+
+def _is_dfs(book_key: str, dfs_books: dict[str, float] | None) -> bool:
+    return bool(dfs_books and book_key in dfs_books)
+
+
 # ── Display builders ──
 
 
-def _build_filter_bar(active_filter: str, filter_keys: list[str]) -> Text:
+def _build_filter_bar(
+    active_filter: str, filter_keys: list[str],
+    dfs_active: bool = False,
+) -> Text:
     """Build the prop market filter toggle bar."""
     bar = Text()
     for fk in filter_keys:
@@ -41,7 +67,10 @@ def _build_filter_bar(active_filter: str, filter_keys: list[str]) -> Text:
         else:
             bar.append(f" {fk} ", style="dim")
         bar.append(" ")
-    bar.append("(m to filter)", style="dim italic")
+    bar.append("(t to filter)", style="dim italic")
+    if dfs_active:
+        bar.append("    ", style="dim")
+        bar.append("* = DFS override", style="dim magenta")
     return bar
 
 
@@ -55,20 +84,27 @@ def _build_header(display_books: list[str]) -> Text:
     h.append(" ")
     h.append("NOVIG".center(7), style="bold #e94560")
     h.append("EV%".center(6), style="bold #e94560")
-    h.append("BEST".center(8), style="bold #00ff88")
+    h.append("BEST".center(10), style="bold #00ff88")
     for bk in display_books:
         h.append(_bk(bk).center(8), style="bold #888888")
     return h
 
 
-def _build_game_separator(away: str, home: str) -> Text:
-    label = f"  {away} @ {home}  "
+def _build_game_separator(away: str, home: str, commence_time=None) -> Text:
+    label = f"  {away} @ {home}"
+    if commence_time:
+        local_time = commence_time.astimezone()
+        label += f"  {local_time.strftime('%-I:%M%p')}"
+    label += "  "
     t = Text()
     t.append(label, style="bold yellow on #1a1a2e")
     return t
 
 
-def _build_prop_pair(row: PropRow, display_books: list[str]) -> list[Text]:
+def _build_prop_pair(
+    row: PropRow, display_books: list[str],
+    dfs_books: dict[str, float] | None = None,
+) -> list[Text]:
     """Build two lines (Over + Under) for a paired PropRow."""
     over_prices = list(row.over_odds.values())
     under_prices = list(row.under_odds.values())
@@ -78,12 +114,12 @@ def _build_prop_pair(row: PropRow, display_books: list[str]) -> list[Text]:
     # Compute inline EV for Under side
     un_novig, un_ev = compute_inline_ev(under_prices, over_prices)
 
-    ov_best = max(over_prices) if over_prices else None
-    un_best = max(under_prices) if under_prices else None
+    ov_best, ov_best_bk = _best_with_book(row.over_odds)
+    un_best, un_best_bk = _best_with_book(row.under_odds)
 
     # ── Over line ──
     over_line = Text()
-    over_line.append(row.player_name[:20].ljust(20), style="bold white")
+    over_line.append(trunc(row.player_name, 20), style="bold white")
     over_line.append(" ")
     over_line.append(_prop_label(row.market_key).center(6), style="magenta")
     over_line.append(" ")
@@ -103,20 +139,21 @@ def _build_prop_pair(row: PropRow, display_books: list[str]) -> list[Text]:
         over_line.append(f"{ov_ev:+.1f}%".center(6), style=ev_style)
     else:
         over_line.append("-".center(6), style="dim")
-    # BEST
-    if ov_best is not None:
-        over_line.append(_odds(ov_best).center(8), style="bold #00ff88")
+    # BEST (with book label)
+    if ov_best is not None and ov_best_bk:
+        label = f"{_odds(ov_best)}/{_short_book(ov_best_bk)}"
+        over_line.append(label.center(10), style="bold #00ff88")
     else:
-        over_line.append("-".center(8), style="dim")
+        over_line.append("-".center(10), style="dim")
     # Per-book
     for bk in display_books:
         price = row.over_odds.get(bk)
+        is_dfs_bk = _is_dfs(bk, dfs_books)
         if price is not None:
             is_best = ov_best is not None and price >= ov_best
-            over_line.append(
-                _odds(price).center(8),
-                style="bold #00ff88" if is_best else "cyan",
-            )
+            text = _odds(price) + ("*" if is_dfs_bk else "")
+            style = "bold magenta" if is_dfs_bk else ("bold #00ff88" if is_best else "cyan")
+            over_line.append(text.center(8), style=style)
         else:
             over_line.append("-".center(8), style="#555555")
 
@@ -142,20 +179,21 @@ def _build_prop_pair(row: PropRow, display_books: list[str]) -> list[Text]:
         under_line.append(f"{un_ev:+.1f}%".center(6), style=ev_style)
     else:
         under_line.append("-".center(6), style="dim")
-    # BEST
-    if un_best is not None:
-        under_line.append(_odds(un_best).center(8), style="bold #00ff88")
+    # BEST (with book label)
+    if un_best is not None and un_best_bk:
+        label = f"{_odds(un_best)}/{_short_book(un_best_bk)}"
+        under_line.append(label.center(10), style="bold #00ff88")
     else:
-        under_line.append("-".center(8), style="dim")
+        under_line.append("-".center(10), style="dim")
     # Per-book
     for bk in display_books:
         price = row.under_odds.get(bk)
+        is_dfs_bk = _is_dfs(bk, dfs_books)
         if price is not None:
             is_best = un_best is not None and price >= un_best
-            under_line.append(
-                _odds(price).center(8),
-                style="bold #00ff88" if is_best else "#ff8866",
-            )
+            text = _odds(price) + ("*" if is_dfs_bk else "")
+            style = "bold magenta" if is_dfs_bk else ("bold #00ff88" if is_best else "#ff8866")
+            under_line.append(text.center(8), style=style)
         else:
             under_line.append("-".center(8), style="#555555")
 
@@ -164,20 +202,34 @@ def _build_prop_pair(row: PropRow, display_books: list[str]) -> list[Text]:
 
 def _build_sticky_header(
     active_filter: str, filter_keys: list[str], display_books: list[str],
+    dfs_active: bool = False,
 ) -> Group:
     """Build the sticky portion: filter bar + column headers."""
     return Group(
-        _build_filter_bar(active_filter, filter_keys),
+        _build_filter_bar(active_filter, filter_keys, dfs_active),
         Text(""),
         _build_header(display_books),
         Rule(style="#444444"),
     )
 
 
+def _sort_props_by_ev(rows: list[PropRow]) -> list[PropRow]:
+    """Sort props: grouped by game (commence_time, event), EV desc within each game."""
+    def _sort_key(r: PropRow) -> tuple:
+        over_prices = list(r.over_odds.values())
+        under_prices = list(r.under_odds.values())
+        _, ov_ev = compute_inline_ev(over_prices, under_prices)
+        _, un_ev = compute_inline_ev(under_prices, over_prices)
+        best_ev = max(ov_ev or -999, un_ev or -999)
+        return (r.commence_time, r.event_id, -best_ev, r.player_name)
+    return sorted(rows, key=_sort_key)
+
+
 def _build_rows(
     rows: list[PropRow],
     active_filter: str,
     display_books: list[str],
+    dfs_books: dict[str, float] | None = None,
 ) -> Group:
     """Build the scrollable prop rows."""
     if active_filter != "ALL":
@@ -185,6 +237,9 @@ def _build_rows(
 
     if not rows:
         return Group(Text("  No prop lines found", style="dim"))
+
+    # Sort by EV
+    rows = _sort_props_by_ev(rows)
 
     elements: list = []
 
@@ -194,10 +249,12 @@ def _build_rows(
     for game_id, game_rows_iter in groupby(rows, key=_game_key):
         game_rows = list(game_rows_iter)
         first = game_rows[0]
-        elements.append(_build_game_separator(first.away_team, first.home_team))
+        elements.append(_build_game_separator(
+            first.away_team, first.home_team, first.commence_time,
+        ))
         elements.append(Rule(style="#222222"))
         for row in game_rows:
-            pair = _build_prop_pair(row, display_books)
+            pair = _build_prop_pair(row, display_books, dfs_books)
             elements.extend(pair)
             elements.append(Rule(style="#1a1a1a"))
 
@@ -216,6 +273,14 @@ class PropsTable(Vertical):
     PropsTable #props-header {
         height: auto;
     }
+    PropsTable #props-search {
+        height: 3;
+        margin: 0 0;
+        display: none;
+    }
+    PropsTable #props-search.visible {
+        display: block;
+    }
     PropsTable #props-scroll {
         height: 1fr;
     }
@@ -227,9 +292,26 @@ class PropsTable(Vertical):
         self._filter_keys: list[str] = ["ALL"]
         self._last_rows: list[PropRow] | None = None
         self._display_books: list[str] = []
+        self._dfs_books: dict[str, float] | None = None
+        self._search_query: str = ""
+        self._loading: bool = False
 
     def set_display_books(self, books: list[str]) -> None:
         self._display_books = books[:MAX_DISPLAY_BOOKS]
+
+    def set_dfs_books(self, dfs_books: dict[str, float]) -> None:
+        """Set DFS book odds overrides."""
+        self._dfs_books = dfs_books or None
+
+    def set_loading(self, loading: bool) -> None:
+        """Show/hide loading state."""
+        self._loading = loading
+        if loading and self._last_rows is None:
+            try:
+                content = self.query_one("#props-content", Static)
+                content.update("[dim]Loading...[/dim]")
+            except Exception:
+                pass
 
     def set_sport(self, sport_key: str, props_markets: list[str]) -> None:
         """Update filter keys for the current sport's prop markets."""
@@ -249,26 +331,82 @@ class PropsTable(Vertical):
         if self._last_rows is not None:
             self.update_props(self._last_rows)
 
+    def toggle_search(self) -> None:
+        """Show/hide the player search input."""
+        try:
+            search = self.query_one("#props-search", Input)
+        except Exception:
+            return
+        if search.has_class("visible"):
+            search.remove_class("visible")
+            self._search_query = ""
+            if self._last_rows is not None:
+                self.update_props(self._last_rows)
+        else:
+            search.add_class("visible")
+            search.focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Filter props by player name as user types."""
+        self._search_query = event.value.strip().lower()
+        if self._last_rows is not None:
+            self.update_props(self._last_rows)
+
+    def on_key(self, event) -> None:
+        """Clear search on Escape."""
+        if event.key == "escape":
+            try:
+                search = self.query_one("#props-search", Input)
+                if search.has_class("visible"):
+                    search.value = ""
+                    search.remove_class("visible")
+                    self._search_query = ""
+                    if self._last_rows is not None:
+                        self.update_props(self._last_rows)
+                    event.prevent_default()
+            except Exception:
+                pass
+
     def compose(self) -> ComposeResult:
         yield Static(" ", id="props-header")
-        with VerticalScroll(id="props-scroll"):
+        yield Input(placeholder="Search player...", id="props-search")
+        with ScrollableContainer(id="props-scroll"):
             yield Static("[dim]Waiting for prop data...[/dim]", id="props-content")
 
     def update_props(self, rows: list[PropRow]) -> None:
         self._last_rows = rows
+        self._loading = False
         try:
             header = self.query_one("#props-header", Static)
             content = self.query_one("#props-content", Static)
+            scroll = self.query_one("#props-scroll", ScrollableContainer)
         except Exception:
             return
 
+        # Save scroll position
+        saved_y = scroll.scroll_y
+
+        dfs_active = bool(self._dfs_books)
         active_filter = self._filter_keys[self._filter_idx]
         header.update(_build_sticky_header(
-            active_filter, self._filter_keys, self._display_books,
+            active_filter, self._filter_keys, self._display_books, dfs_active,
         ))
 
-        if not rows:
+        # Apply search filter
+        display_rows = rows
+        if self._search_query:
+            display_rows = [
+                r for r in display_rows
+                if self._search_query in r.player_name.lower()
+            ]
+
+        if not display_rows:
             content.update("[dim]No prop lines found for this sport[/dim]")
             return
 
-        content.update(_build_rows(rows, active_filter, self._display_books))
+        content.update(_build_rows(
+            display_rows, active_filter, self._display_books, self._dfs_books,
+        ))
+
+        # Restore scroll position
+        scroll.call_after_refresh(scroll.scroll_to, y=saved_y, animate=False)

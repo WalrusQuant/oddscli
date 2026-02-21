@@ -59,8 +59,15 @@ scores_refresh_interval: 60
 # EV threshold — only highlight bets above this % EV
 ev_threshold: 2.0
 
+# EV odds range — only show EV bets within this American odds range
+ev_odds_min: -200
+ev_odds_max: 200
+
 # Odds format: american or decimal
 odds_format: american
+
+# Alternate lines (alternate_spreads, alternate_totals) — toggle at runtime with 'l'
+alt_lines_enabled: true
 
 # Credit management
 low_credit_warning: 50

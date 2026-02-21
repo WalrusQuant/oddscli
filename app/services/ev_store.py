@@ -20,7 +20,6 @@ class EVStore:
         self._create_tables()
 
     def _create_tables(self) -> None:
-        self._conn.execute("DROP TABLE IF EXISTS ev_bets")
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS ev_bets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
