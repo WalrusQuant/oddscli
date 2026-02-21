@@ -16,8 +16,39 @@ GamesTicker {
     background: #0f0f23;
 }
 
+#games-header {
+    padding: 0;
+    background: #0f0f23;
+}
+
+#games-scroll {
+    background: #0f0f23;
+}
+
 #games-content {
     padding: 0;
+}
+
+/* ── Props table ── */
+PropsTable {
+    background: #0f0f23;
+}
+
+#props-header {
+    padding: 0;
+    background: #0f0f23;
+}
+
+#props-scroll {
+    background: #0f0f23;
+}
+
+#props-content {
+    padding: 0;
+}
+
+PropsTable.visible {
+    display: block;
 }
 
 /* ── EV panel ── */

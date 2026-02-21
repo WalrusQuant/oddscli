@@ -45,6 +45,13 @@ class BudgetTracker:
         return self.remaining > self.critical_stop
 
     @property
+    def can_fetch_props(self) -> bool:
+        """Props require multiple per-event calls — use a higher threshold."""
+        if self.remaining is None:
+            return True
+        return self.remaining > self.critical_stop * 3
+
+    @property
     def status_text(self) -> str:
         if self.remaining is None:
             return "Credits: --"

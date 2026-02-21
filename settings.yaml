@@ -3,11 +3,12 @@ regions:
   - us
   - us2
   - us_ex
+  - us_dfs
 
 # Bookmakers to display and compare (order = display order)
 # All books from us, us2, and us_ex regions
 bookmakers:
-  # us
+  # us ------
   - fanduel
   - draftkings
   - betmgm
@@ -19,20 +20,25 @@ bookmakers:
   - fanatics
   # lowvig
   # mybookieag
-  # us2
+  # us2 -----
   - ballybet
   # betanysports
   # betparx
-  - espnbet
+  # espnbet
   - fliff
   - hardrockbet
   - rebet
-  # us_ex
+  # us_ex -----
   - betopenly
   - kalshi
   - novig
   # polymarket
   - prophetx
+  # us_dfs -----
+  - betr_us_dfs
+  - pick6
+  - prizepicks
+  - underdog
 
 # EV reference method: "market_average" uses the no-vig average across all books
 ev_reference: market_average
@@ -59,3 +65,42 @@ odds_format: american
 # Credit management
 low_credit_warning: 50
 critical_credit_stop: 10
+
+# Player props refresh interval (seconds) — higher than odds since props cost more credits
+props_refresh_interval: 300
+props_max_concurrent: 5
+
+# DFS sites: set effective odds for your lineup type
+# API returns a flat juice (e.g. -137) but actual odds depend on # of legs
+# 2-leg: -137, 3-leg: -130, 5-leg: -119, etc.
+dfs_books:
+  betr_us_dfs: -137
+  pick6: -137
+  prizepicks: -137
+  underdog: -137
+
+# Player prop markets per sport
+props_markets:
+  americanfootball_nfl:
+    - player_pass_yds
+    - player_pass_tds
+    - player_rush_yds
+    - player_reception_yds
+    - player_receptions
+    - player_anytime_td
+  basketball_nba:
+    - player_points
+    - player_rebounds
+    - player_assists
+    - player_threes
+    - player_points_rebounds_assists
+  baseball_mlb:
+    - batter_home_runs
+    - batter_hits
+    - batter_total_bases
+    - pitcher_strikeouts
+  icehockey_nhl:
+    - player_points
+    - player_goals
+    - player_assists
+    - player_shots_on_goal

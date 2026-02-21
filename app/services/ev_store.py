@@ -42,7 +42,9 @@ class EVStore:
                 detected_at TEXT NOT NULL,
                 last_seen_at TEXT NOT NULL,
                 is_active INTEGER NOT NULL DEFAULT 1,
-                UNIQUE(book, event_id, market, outcome_name, outcome_point_str)
+                player_name TEXT NOT NULL DEFAULT '',
+                is_prop INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(book, event_id, market, outcome_name, outcome_point_str, player_name)
             )
         """)
         self._conn.commit()
@@ -52,14 +54,16 @@ class EVStore:
         now = datetime.now().isoformat()
         for bet in bets:
             pt_str = str(bet.outcome_point) if bet.outcome_point is not None else ""
+            player = bet.player_name or ""
             self._conn.execute("""
                 INSERT INTO ev_bets
                     (sport_key, book, book_title, event_id, home_team, away_team,
                      market, outcome_name, outcome_point_str, odds, fair_odds,
                      no_vig_prob, ev_percentage, edge, num_books,
-                     detected_at, last_seen_at, is_active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-                ON CONFLICT(book, event_id, market, outcome_name, outcome_point_str)
+                     detected_at, last_seen_at, is_active,
+                     player_name, is_prop)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                ON CONFLICT(book, event_id, market, outcome_name, outcome_point_str, player_name)
                 DO UPDATE SET
                     odds = excluded.odds,
                     fair_odds = excluded.fair_odds,
@@ -77,13 +81,13 @@ class EVStore:
                 bet.ev_percentage, bet.edge, bet.num_books,
                 bet.detected_at.isoformat() if bet.detected_at else now,
                 now,
+                player, 1 if bet.is_prop else 0,
             ))
         self._conn.commit()
 
     def mark_stale_for_sport(self, sport_key: str, active_event_ids: set[str]) -> None:
         """Mark bets inactive if their event is gone from the current feed."""
         if not active_event_ids:
-            # If no events at all, mark everything for this sport as stale
             self._conn.execute(
                 "UPDATE ev_bets SET is_active = 0 WHERE sport_key = ? AND is_active = 1",
                 (sport_key,),
@@ -97,12 +101,20 @@ class EVStore:
             """, [sport_key] + list(active_event_ids))
         self._conn.commit()
 
-    def deactivate_missing(self, sport_key: str, current_bets: list[EVBet]) -> None:
-        """Deactivate bets that were previously active but aren't in the current scan."""
+    def deactivate_missing(
+        self, sport_key: str, current_bets: list[EVBet], *, is_props: bool = False,
+    ) -> None:
+        """Deactivate bets that were previously active but aren't in the current scan.
+
+        Scopes by is_prop so game and prop deactivations don't interfere.
+        """
+        prop_val = 1 if is_props else 0
+
         if not current_bets:
             self._conn.execute(
-                "UPDATE ev_bets SET is_active = 0 WHERE sport_key = ? AND is_active = 1",
-                (sport_key,),
+                "UPDATE ev_bets SET is_active = 0 "
+                "WHERE sport_key = ? AND is_active = 1 AND is_prop = ?",
+                (sport_key, prop_val),
             )
             self._conn.commit()
             return
@@ -111,18 +123,22 @@ class EVStore:
         current_keys = set()
         for b in current_bets:
             pt = str(b.outcome_point) if b.outcome_point is not None else ""
-            current_keys.add((b.book, b.event_id, b.market, b.outcome_name, pt))
+            player = b.player_name or ""
+            current_keys.add((b.book, b.event_id, b.market, b.outcome_name, pt, player))
 
-        # Get all active bets for this sport
+        # Get all active bets for this sport scoped by prop type
         rows = self._conn.execute(
-            "SELECT id, book, event_id, market, outcome_name, outcome_point_str "
-            "FROM ev_bets WHERE sport_key = ? AND is_active = 1",
-            (sport_key,),
+            "SELECT id, book, event_id, market, outcome_name, outcome_point_str, player_name "
+            "FROM ev_bets WHERE sport_key = ? AND is_active = 1 AND is_prop = ?",
+            (sport_key, prop_val),
         ).fetchall()
 
         stale_ids = []
         for r in rows:
-            key = (r["book"], r["event_id"], r["market"], r["outcome_name"], r["outcome_point_str"])
+            key = (
+                r["book"], r["event_id"], r["market"],
+                r["outcome_name"], r["outcome_point_str"], r["player_name"],
+            )
             if key not in current_keys:
                 stale_ids.append(r["id"])
 
@@ -134,17 +150,20 @@ class EVStore:
             )
             self._conn.commit()
 
-    def get_active_for_sport(self, sport_key: str, limit: int = 40) -> list[dict]:
+    def get_active_for_sport(
+        self, sport_key: str, limit: int = 40, *, is_props: bool = False,
+    ) -> list[dict]:
         """Get currently active EV bets for a specific sport."""
+        prop_val = 1 if is_props else 0
         rows = self._conn.execute("""
             SELECT *,
                 ROUND((julianday('now', 'localtime') - julianday(detected_at)) * 24 * 60, 1)
                     AS minutes_active
             FROM ev_bets
-            WHERE is_active = 1 AND sport_key = ?
+            WHERE is_active = 1 AND sport_key = ? AND is_prop = ?
             ORDER BY ev_percentage DESC
             LIMIT ?
-        """, (sport_key, limit)).fetchall()
+        """, (sport_key, prop_val, limit)).fetchall()
         return [dict(r) for r in rows]
 
     def close(self) -> None:

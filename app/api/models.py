@@ -20,6 +20,7 @@ class OutcomeOdds(BaseModel):
     name: str
     price: float
     point: float | None = None
+    description: str | None = None
 
 
 class Market(BaseModel):
@@ -88,3 +89,18 @@ class GameRow(BaseModel):
     away_score: str = "-"
     completed: bool = False
     bookmakers: list[Bookmaker] = Field(default_factory=list)
+
+
+class PropRow(BaseModel):
+    """Display-ready model for a player prop line (paired Over/Under)."""
+
+    event_id: str
+    sport_key: str
+    home_team: str
+    away_team: str
+    commence_time: datetime
+    player_name: str
+    market_key: str
+    consensus_point: float | None = None
+    over_odds: dict[str, float] = Field(default_factory=dict)   # book_key -> price
+    under_odds: dict[str, float] = Field(default_factory=dict)  # book_key -> price

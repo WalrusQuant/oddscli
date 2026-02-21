@@ -52,5 +52,5 @@ class StatusBar(Static):
             parts.append(self._last_refresh)
         if self._warning:
             parts.append(f"[bold red]{self._warning}[/bold red]")
-        parts.append("[dim]q:Quit  ←/→:Sport  m:Market  r:Refresh  e:EV Panel  s:Settings[/dim]")
+        parts.append("[dim]q:Quit  ←/→:Sport  m:Market  r:Refresh  e:EV Panel  p:Props  s:Settings[/dim]")
         self.update("  |  ".join(parts))

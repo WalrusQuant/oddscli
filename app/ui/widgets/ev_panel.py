@@ -17,8 +17,15 @@ def _odds(price: float) -> str:
     return f"+{int(price)}" if price >= 0 else str(int(price))
 
 
+from app.ui.widgets.constants import PROP_LABELS
+
+
 def _mkt(market: str) -> str:
     return {"h2h": "ML", "spreads": "Sprd", "totals": "O/U"}.get(market, market)
+
+
+def _prop_mkt(market: str) -> str:
+    return PROP_LABELS.get(market, market[:6])
 
 
 def _ago(dt_str: str | None) -> str:
@@ -85,11 +92,20 @@ def _build_ev_row(r: dict) -> Text:
     line.append("  ")
 
     # Pick — market + outcome + point (NO odds here)
-    market = _mkt(r["market"])
-    outcome = r["outcome_name"][:12]
-    pt = r.get("outcome_point_str", "")
-    pt_str = f" {pt}" if pt else ""
-    pick_str = f"{market} {outcome}{pt_str}"
+    is_prop = bool(r.get("is_prop"))
+    if is_prop:
+        player = (r.get("player_name") or "")[:10]
+        prop_lbl = _prop_mkt(r["market"])
+        ou = r["outcome_name"][:1]  # O or U
+        pt = r.get("outcome_point_str", "")
+        pt_str = f" {pt}" if pt else ""
+        pick_str = f"{player} {prop_lbl} {ou}{pt_str}"
+    else:
+        market = _mkt(r["market"])
+        outcome = r["outcome_name"][:12]
+        pt = r.get("outcome_point_str", "")
+        pt_str = f" {pt}" if pt else ""
+        pick_str = f"{market} {outcome}{pt_str}"
     line.append(pick_str[:20].ljust(20), style="white")
 
     line.append("  ")
