@@ -342,6 +342,8 @@ class OddsTickerApp(App):
         props_table = self.query_one("#props-table", PropsTable)
         status = self.query_one("#status-bar", StatusBar)
         ev_panel = self.query_one("#ev-panel", EVPanel)
+        arb_panel = self.query_one("#arb-panel", ArbPanel)
+        mid_panel = self.query_one("#mid-panel", MiddlesPanel)
 
         props_table.set_loading(True)
 
@@ -359,6 +361,13 @@ class OddsTickerApp(App):
             props_table.update_props(prop_rows)
 
             ev_panel.update_bets(prop_ev_bets)
+
+            # Prop arb + middles detection
+            prop_arbs = await self.data_service.get_prop_arb_bets(sport)
+            arb_panel.update_arbs(prop_arbs)
+
+            prop_middles = await self.data_service.get_prop_middle_bets(sport)
+            mid_panel.update_middles(prop_middles)
 
             status.update_credits(self.data_service.budget)
             status.update_refresh_time()

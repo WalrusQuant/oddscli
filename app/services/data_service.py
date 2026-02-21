@@ -18,7 +18,16 @@ from app.api.models import Bookmaker, Event, GameRow, PropRow, Score, Sport
 from app.config import Settings
 from app.services.budget import BudgetTracker
 from app.services.cache import TTLCache
-from app.services.ev import ArbBet, EVBet, MiddleBet, find_arb_bets, find_ev_bets, find_middle_bets
+from app.services.ev import (
+    ArbBet,
+    EVBet,
+    MiddleBet,
+    find_arb_bets,
+    find_ev_bets,
+    find_middle_bets,
+    find_prop_arb_bets,
+    find_prop_middle_bets,
+)
 from app.services.ev_store import EVStore
 
 log = logging.getLogger(__name__)
@@ -433,6 +442,29 @@ class DataService:
     def get_prop_ev_for_sport(self, sport: str) -> list[dict]:
         """Get active prop EV bets from the store."""
         return self.ev_store.get_active_for_sport(sport, limit=40, is_props=True)
+
+    async def get_prop_arb_bets(self, sport: str) -> list[ArbBet]:
+        """Find arbitrage opportunities on player props (uses cached prop data)."""
+        if not self.settings.arb_enabled:
+            return []
+        events = self.cache.get(f"{sport}:props") or []
+        return find_prop_arb_bets(
+            events,
+            min_profit_pct=self.settings.arb_min_profit_pct,
+            dfs_books=self.settings.dfs_books,
+        )
+
+    async def get_prop_middle_bets(self, sport: str) -> list[MiddleBet]:
+        """Find middle opportunities on player props (uses cached prop data)."""
+        if not self.settings.middle_enabled:
+            return []
+        events = self.cache.get(f"{sport}:props") or []
+        return find_prop_middle_bets(
+            events,
+            min_window=self.settings.middle_min_window,
+            max_combined_cost=self.settings.middle_max_combined_cost,
+            dfs_books=self.settings.dfs_books,
+        )
 
     def force_refresh(self, sport: str) -> None:
         """Invalidate cache for a sport to force a fresh fetch."""

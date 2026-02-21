@@ -54,6 +54,8 @@ class ArbBet(BaseModel):
     point_b: float | None = None
     profit_pct: float  # guaranteed profit percentage
     implied_sum: float  # sum of implied probs (< 1.0 means arb)
+    player_name: str | None = None
+    is_prop: bool = False
 
 
 class MiddleBet(BaseModel):
@@ -80,6 +82,8 @@ class MiddleBet(BaseModel):
     combined_cost: float  # sum of implied probs for both legs
     hit_prob: float = 0.0  # estimated probability of landing in the middle
     ev_percentage: float = 0.0  # expected value as a percentage of total stake
+    player_name: str | None = None
+    is_prop: bool = False
 
 
 def american_to_decimal(american: float) -> float:
@@ -758,3 +762,201 @@ def _find_total_middles(
                         hit_prob=hp,
                         ev_percentage=ev_pct,
                     ))
+
+
+# ── Prop Arbitrage detection ──
+
+
+def find_prop_arb_bets(
+    events: list[Event],
+    min_profit_pct: float = 0.1,
+    dfs_books: dict[str, float] | None = None,
+) -> list[ArbBet]:
+    """Find two-leg arb opportunities on player props.
+
+    Groups outcomes by (player, market, point) and checks if the best
+    Over + best Under implied probs sum to < 1.0 at the same line.
+    """
+    arbs: list[ArbBet] = []
+    for event in events:
+        for market_key in _discover_market_keys(event):
+            _find_prop_market_arbs(
+                event, market_key, arbs, min_profit_pct, dfs_books,
+            )
+    arbs.sort(key=lambda a: a.profit_pct, reverse=True)
+    return arbs
+
+
+def _find_prop_market_arbs(
+    event: Event,
+    market_key: str,
+    arbs: list[ArbBet],
+    min_profit_pct: float,
+    dfs_books: dict[str, float] | None,
+) -> None:
+    """Find arbs in a single prop market — same player, same line."""
+    # Group by (player, point) → side → best price
+    groups: dict[str, dict[str, list[tuple[float, Bookmaker, OutcomeOdds]]]] = {}
+
+    for bm in event.bookmakers:
+        outcomes = _get_market_outcomes(bm, market_key)
+        if not outcomes:
+            continue
+        for out in outcomes:
+            if not out.description or out.point is None:
+                continue
+            group_key = f"{out.description}|{out.point}"
+            price = _effective_price(out, bm, dfs_books)
+            groups.setdefault(group_key, {}).setdefault(out.name, []).append(
+                (price, bm, out)
+            )
+
+    for group_key, sides in groups.items():
+        if len(sides) < 2:
+            continue
+
+        # Find best price per side
+        best_per_side: dict[str, tuple[float, Bookmaker, OutcomeOdds]] = {}
+        for side_name, entries in sides.items():
+            for price, bm, out in entries:
+                if side_name not in best_per_side or price > best_per_side[side_name][0]:
+                    best_per_side[side_name] = (price, bm, out)
+
+        # Check all pairs
+        side_names = list(best_per_side.keys())
+        for i in range(len(side_names)):
+            for j in range(i + 1, len(side_names)):
+                name_a, name_b = side_names[i], side_names[j]
+                price_a, bm_a, out_a = best_per_side[name_a]
+                price_b, bm_b, out_b = best_per_side[name_b]
+
+                imp_a = american_to_implied_prob(price_a)
+                imp_b = american_to_implied_prob(price_b)
+                imp_sum = imp_a + imp_b
+
+                if imp_sum < 1.0:
+                    profit = (1.0 / imp_sum - 1.0) * 100
+                    if profit >= min_profit_pct:
+                        arbs.append(ArbBet(
+                            sport_key=event.sport_key,
+                            event_id=event.id,
+                            home_team=event.home_team,
+                            away_team=event.away_team,
+                            market=market_key,
+                            book_a=bm_a.key,
+                            book_a_title=bm_a.title,
+                            outcome_a=out_a.name,
+                            odds_a=price_a,
+                            point_a=out_a.point,
+                            book_b=bm_b.key,
+                            book_b_title=bm_b.title,
+                            outcome_b=out_b.name,
+                            odds_b=price_b,
+                            point_b=out_b.point,
+                            profit_pct=profit,
+                            implied_sum=imp_sum,
+                            player_name=out_a.description,
+                            is_prop=True,
+                        ))
+
+
+# ── Prop Middles detection ──
+
+
+def find_prop_middle_bets(
+    events: list[Event],
+    min_window: float = 0.5,
+    max_combined_cost: float = 1.08,
+    dfs_books: dict[str, float] | None = None,
+) -> list[MiddleBet]:
+    """Find cross-line middle opportunities on player props.
+
+    Groups by (player, market) across all lines, then looks for
+    Over at line X (Book A) vs Under at line Y (Book B) where Y > X.
+    """
+    middles: list[MiddleBet] = []
+    for event in events:
+        for market_key in _discover_market_keys(event):
+            _find_prop_market_middles(
+                event, market_key, middles, min_window, max_combined_cost, dfs_books,
+            )
+    middles.sort(key=lambda m: m.ev_percentage, reverse=True)
+    return middles
+
+
+def _find_prop_market_middles(
+    event: Event,
+    market_key: str,
+    middles: list[MiddleBet],
+    min_window: float,
+    max_combined_cost: float,
+    dfs_books: dict[str, float] | None,
+) -> None:
+    """Find middles in a single prop market for each player."""
+    # Group by player → collect Overs and Unders with their lines
+    player_overs: dict[str, list[tuple[float, float, Bookmaker]]] = {}
+    player_unders: dict[str, list[tuple[float, float, Bookmaker]]] = {}
+
+    for bm in event.bookmakers:
+        outcomes = _get_market_outcomes(bm, market_key)
+        if not outcomes:
+            continue
+        for out in outcomes:
+            if not out.description or out.point is None:
+                continue
+            price = _effective_price(out, bm, dfs_books)
+            if out.name == "Over":
+                player_overs.setdefault(out.description, []).append(
+                    (out.point, price, bm)
+                )
+            elif out.name == "Under":
+                player_unders.setdefault(out.description, []).append(
+                    (out.point, price, bm)
+                )
+
+    # For each player, find Over X / Under Y cross-line opportunities
+    for player in player_overs:
+        if player not in player_unders:
+            continue
+        overs = player_overs[player]
+        unders = player_unders[player]
+
+        for ov_pt, ov_price, ov_bm in overs:
+            for un_pt, un_price, un_bm in unders:
+                if ov_bm.key == un_bm.key:
+                    continue
+                window = un_pt - ov_pt
+                if window >= min_window:
+                    imp_ov = american_to_implied_prob(ov_price)
+                    imp_un = american_to_implied_prob(un_price)
+                    cost = imp_ov + imp_un
+                    if cost <= max_combined_cost:
+                        hp = _estimate_middle_hit_prob(
+                            window, event.sport_key, market_key,
+                        )
+                        ev_pct = _compute_middle_ev(ov_price, un_price, hp)
+                        middles.append(MiddleBet(
+                            sport_key=event.sport_key,
+                            event_id=event.id,
+                            home_team=event.home_team,
+                            away_team=event.away_team,
+                            market=market_key,
+                            book_a=ov_bm.key,
+                            book_a_title=ov_bm.title,
+                            line_a=ov_pt,
+                            odds_a=ov_price,
+                            outcome_a="Over",
+                            book_b=un_bm.key,
+                            book_b_title=un_bm.title,
+                            line_b=un_pt,
+                            odds_b=un_price,
+                            outcome_b="Under",
+                            middle_low=ov_pt,
+                            middle_high=un_pt,
+                            window_size=window,
+                            combined_cost=cost,
+                            hit_prob=hp,
+                            ev_percentage=ev_pct,
+                            player_name=player,
+                            is_prop=True,
+                        ))

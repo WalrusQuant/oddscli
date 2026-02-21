@@ -10,7 +10,7 @@ from textual.containers import VerticalScroll
 from textual.widgets import Static
 
 from app.services.ev import MiddleBet, american_to_decimal
-from app.ui.widgets.constants import trunc
+from app.ui.widgets.constants import PROP_LABELS, trunc
 
 BASE_STAKE = 100.0  # Leg A fixed wager
 
@@ -20,7 +20,8 @@ def _odds(price: float) -> str:
 
 
 def _mkt(market: str) -> str:
-    return {"h2h": "ML", "spreads": "Sprd", "totals": "O/U"}.get(market, market[:5])
+    base = {"h2h": "ML", "spreads": "Sprd", "totals": "O/U"}
+    return base.get(market, PROP_LABELS.get(market, market[:5]))
 
 
 def _build_mid_header() -> Text:
@@ -90,8 +91,11 @@ def _build_mid_row(mid: MiddleBet) -> Text:
     line.append(f"{mid.window_size:.1f}".rjust(4), style="bold #cc88ff")
     line.append("  ")
 
-    # Game
-    game_str = f"{mid.away_team[:11]} @ {mid.home_team[:11]}"
+    # Game / Player
+    if mid.is_prop and mid.player_name:
+        game_str = trunc(mid.player_name, 26)
+    else:
+        game_str = f"{mid.away_team[:11]} @ {mid.home_team[:11]}"
     line.append(trunc(game_str, 26), style="dim")
     line.append("  ")
 

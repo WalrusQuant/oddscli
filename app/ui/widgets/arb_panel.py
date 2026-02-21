@@ -10,7 +10,7 @@ from textual.containers import VerticalScroll
 from textual.widgets import Static
 
 from app.services.ev import ArbBet, american_to_decimal
-from app.ui.widgets.constants import trunc
+from app.ui.widgets.constants import PROP_LABELS, trunc
 
 BASE_STAKE = 100.0  # Leg A fixed wager
 
@@ -46,7 +46,8 @@ def _build_arb_header() -> Text:
 
 
 def _mkt(market: str) -> str:
-    return {"h2h": "ML", "spreads": "Sprd", "totals": "O/U"}.get(market, market[:5])
+    base = {"h2h": "ML", "spreads": "Sprd", "totals": "O/U"}
+    return base.get(market, PROP_LABELS.get(market, market[:5]))
 
 
 def _compute_bet_sizing(arb: ArbBet) -> tuple[float, float, float, float]:
@@ -78,8 +79,11 @@ def _build_arb_row(arb: ArbBet) -> Text:
     line.append(trunc(arb.book_b_title, 10), style="bold")
     line.append("  ")
 
-    # Game
-    game_str = f"{arb.away_team[:11]} @ {arb.home_team[:11]}"
+    # Game / Player
+    if arb.is_prop and arb.player_name:
+        game_str = trunc(arb.player_name, 26)
+    else:
+        game_str = f"{arb.away_team[:11]} @ {arb.home_team[:11]}"
     line.append(trunc(game_str, 26), style="dim")
     line.append("  ")
 
